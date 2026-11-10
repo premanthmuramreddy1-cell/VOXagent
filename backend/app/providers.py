@@ -71,8 +71,9 @@ class OllamaLLM:
         body: dict[str, Any] = {"model": self.model, "messages": messages, "stream": True}
         if tools:
             body["tools"] = tools
-        if schema:
+        if schema:  # structured calls: low temperature and a hard cap so a small model cannot loop
             body["format"] = schema
+            body["options"] = {"temperature": 0.1, "num_predict": 1500}
         async with httpx.AsyncClient(base_url=settings().ollama_url, timeout=120) as http:
             async with http.stream("POST", "/api/chat", json=body) as response:
                 response.raise_for_status()

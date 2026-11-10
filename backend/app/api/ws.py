@@ -89,7 +89,7 @@ class Speaker:
 
     def __init__(self, channel: Channel, user_id: str, enabled: bool, started: float):
         self.channel, self.user_id, self.enabled, self.started = channel, user_id, enabled, started
-        self.language, self.buffer, self.first = "en", "", True
+        self.language, self.buffer, self.first, self.in_code = "en", "", True, False
         self.queue: asyncio.Queue[str | None] = asyncio.Queue()
         self.worker = asyncio.create_task(self._work()) if enabled else None
 
@@ -103,13 +103,20 @@ class Speaker:
         if type == "answer.delta":
             self.buffer += payload["text"]
             while match := SENTENCE.match(self.buffer):
-                self.queue.put_nowait(match.group(1))
+                self._say(match.group(1))
                 self.buffer = self.buffer[match.end():]
+
+    def _say(self, text: str) -> None:
+        """Queue text for speech, skipping fenced code blocks: code is shown, not read aloud."""
+        for part in text.split("```"):
+            if not self.in_code and part.strip():
+                self.queue.put_nowait(part.strip())
+            self.in_code = not self.in_code
+        self.in_code = not self.in_code  # split yields one more part than there are fences
 
     async def finish(self) -> None:
         if self.worker:
-            if self.buffer.strip():
-                self.queue.put_nowait(self.buffer.strip())
+            self._say(self.buffer)
             self.queue.put_nowait(None)
             await self.worker
 

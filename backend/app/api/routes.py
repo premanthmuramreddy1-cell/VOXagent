@@ -12,8 +12,7 @@ from sqlalchemy.orm import Session
 from app import providers as prov
 from app.agent import Agent
 from app.config import settings
-from app.db import (Activity, ChatSession, ErrorEvent, Message, Review, Upload, UsageEvent, User, get_db, now,
-                    record_error)
+from app.db import (Activity, ChatSession, ErrorEvent, Message, Review, Upload, UsageEvent, User, get_db, now)
 from app.security import admin_user, current_user, sha256
 from app.skills import RunContext, discover
 from app.skills.code_review import Args, skill, to_markdown
@@ -89,14 +88,11 @@ async def create_review(args: Args, user: User = Depends(current_user), db: Sess
 
     async def quiet(*_args, **_kwargs) -> None: ...
 
-    ctx = RunContext(user.id, "", "", [], quiet, lambda m, s=None: agent.complete(user.id, m, s))
+    ctx = RunContext(user.id, "", args.code, [], quiet, lambda m, s=None: agent.complete(user.id, m, s))
     try:
         result = await skill.run(args, ctx)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
-    except prov.ProviderError as exc:
-        record_error("review", str(exc), user.id)
-        raise HTTPException(503, "the language model is unavailable, try again shortly") from None
     return _review_json(db.get(Review, result.data["review_id"]))  # type: ignore[arg-type]
 
 

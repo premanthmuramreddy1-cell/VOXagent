@@ -39,7 +39,7 @@ async def evaluate(use_llm: bool) -> dict:
         async def noop(*_a, **_k) -> None: ...
 
         ctx = RunContext("eval", "eval", "", [], noop, lambda m, s=None: agent.complete("eval", m, s))
-        issues = merge(issues, await llm_issues(files, ctx, limit=len(files)))
+        issues = merge(issues, await llm_issues(files, ctx, [], limit=len(files)))
     static = [e for e in expected if not e["needs_llm"]]
     result: dict = {"static_recall": sum(hit(e, issues) for e in static) / len(static)}
     if use_llm:

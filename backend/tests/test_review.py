@@ -7,7 +7,8 @@ import pytest
 from app import providers as prov
 from app.config import settings
 from app.db import record
-from app.skills.code_review import _from_github, scan_secrets, score
+from app.skills import RunContext
+from app.skills.code_review import Args, _from_github, gather, scan_secrets, score
 from evals.run import evaluate
 from tests.conftest import signup
 from tests.fakes import FakeLLM, FakeSTT, FakeTTS
@@ -53,6 +54,7 @@ def test_review_survives_a_model_that_breaks_the_schema(client, auth, fake):
     fake("this is not json")
     review = client.post("/reviews", headers=auth, json={"code": BAD}).json()
     assert [i["source"] for i in review["issues"]] == ["ruff"]
+    assert "unusable answer" in review["not_run"][-1]
 
 
 def test_review_export_share_and_ownership(client, auth, fake):
@@ -92,9 +94,21 @@ def test_review_input_limits_and_errors(client, auth, fake, monkeypatch):
     assert limited.status_code == 400 and "daily free limit" in limited.json()["detail"]
 
 
-def test_review_reports_llm_outage(client, auth, fake):
+def test_review_keeps_static_findings_when_the_llm_is_down(client, auth, fake):
     fake(RuntimeError("down"))
-    assert client.post("/reviews", headers=auth, json={"code": BAD}).status_code == 503
+    review = client.post("/reviews", headers=auth, json={"code": BAD}).json()
+    assert [i["source"] for i in review["issues"]] == ["ruff"]
+    assert "LLM review (the language model is unavailable)" in review["not_run"]
+
+
+def test_review_refuses_code_the_model_made_up():
+    async def nothing(*_a, **_k): ...
+
+    ctx = RunContext("u1", "s1", "what is recursion?", [], nothing, nothing)
+    with pytest.raises(ValueError, match="no code to review"):
+        asyncio.run(gather(Args(code="def fact(n): return n * fact(n - 1)"), ctx))
+    ctx.user_text = "review this: def f(x):  return eval(x)"
+    assert asyncio.run(gather(Args(code="def f(x): return eval(x)"), ctx))[1] == {"snippet.py": "def f(x): return eval(x)"}
 
 
 @pytest.mark.parametrize("url", [

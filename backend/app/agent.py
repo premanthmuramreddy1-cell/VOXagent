@@ -37,10 +37,11 @@ PLAN_SCHEMA = {
 
 PLANNER = """You plan work for a voice assistant. Reply with JSON only.
 restatement: the user's request in one short line, in the user's own language.
-language: two-letter code of the language the user used (en, hi, te, ta). Hinglish counts as hi.
+language: two-letter code of the language the user used (en, hi, te, ta). Hindi written in English letters (Hinglish, like "mujhe batao") counts as hi.
 unclear: true only when the request cannot be understood. Then put a short clarifying question in "question".
 steps: the steps needed, each with "text" and "skill". "skill" is one of the names below, or "" when no skill is needed.
-Use a skill only when the request really needs it. A plain question needs no steps.
+Most requests are plain questions or chat: they need no skill and an empty steps list.
+Use a skill only when its description says it fits exactly what the user asked for.
 Skills:
 {skills}"""
 

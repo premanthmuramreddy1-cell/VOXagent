@@ -77,6 +77,16 @@ def test_answer_is_spoken_sentence_by_sentence_in_the_users_language(client, tok
     assert len(audio) == 2 and audio[0].startswith(b"RIFF")
 
 
+def test_code_blocks_are_shown_but_not_read_aloud(client, token, fake):
+    _, tts = fake(plan(), "Here it is. ```python\nx = 1\n``` That is all.")
+    session_id, _ = open_session(client, token)
+    sock = connect(client, session_id, token)
+    sock.send_json({"type": "text.input", "text": "show me", "speak": True})
+    events, _ = collect(sock)
+    assert [text for text, _ in tts.spoken] == ["Here it is.", "That is all."]
+    assert "x = 1" in events[-2]["text"]
+
+
 def test_voice_turn_transcribes_and_normalizes_code_terms(client, token, fake):
     llm, _ = fake(plan(), "Going there.", stt=FakeSTT("go to line forty two", "en"))
     session_id, _ = open_session(client, token)

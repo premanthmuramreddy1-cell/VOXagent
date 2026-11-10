@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.db import Review, SessionLocal, User, record
+from app.providers import ProviderError
 from app.security import check_daily_limit
 from app.skills import Permission, RunContext, SkillResult
 
@@ -147,6 +148,10 @@ async def _from_github(url: str) -> dict[str, str]:
     return _from_blob(name, blob)
 
 
+def _squash(text: str) -> str:
+    return "".join(text.split())
+
+
 def _pasted(text: str) -> str:
     fenced = re.search(r"```[\w+-]*\n(.*?)```", text, re.S)
     return fenced.group(1) if fenced else ""
@@ -160,7 +165,8 @@ async def gather(args: Args, ctx: RunContext) -> tuple[str, dict[str, str]]:
         return f"upload {upload}", _from_upload(ctx.user_id, upload)
     if url:
         return url, await _from_github(url)
-    code = args.code or _pasted(ctx.user_text)
+    # Only review code the user actually gave; a model can invent a `code` argument.
+    code = _pasted(ctx.user_text) or (args.code if _squash(args.code) in _squash(ctx.user_text) else "")
     if not code.strip():
         raise ValueError("no code to review: paste code, attach a file or zip, or give a GitHub URL")
     return "pasted code", {PurePosixPath(args.filename).name or "snippet.py": code}
@@ -281,8 +287,8 @@ async def static_analysis(files: dict[str, str]) -> tuple[list[dict], list[str]]
 
 # ---- LLM pass, scoring, report ------------------------------------------------
 
-async def llm_issues(files: dict[str, str], ctx: RunContext, limit: int = 6) -> list[dict]:
-    issues = []
+async def llm_issues(files: dict[str, str], ctx: RunContext, not_run: list[str], limit: int = 6) -> list[dict]:
+    issues: list[dict] = []
     for name, text in list(files.items())[:limit]:
         lines = text[: settings().max_file_chars].splitlines()
         numbered = "\n".join(f"{i}: {line}" for i, line in enumerate(lines, 1))
@@ -293,6 +299,7 @@ async def llm_issues(files: dict[str, str], ctx: RunContext, limit: int = 6) -> 
         try:
             found = json.loads(await ctx.complete(messages, ISSUES_SCHEMA))["issues"]
         except (ValueError, KeyError, TypeError):
+            not_run.append(f"LLM review of {name} (the model returned an unusable answer)")
             continue
         for item in found:
             ok = isinstance(item, dict) and item.get("severity") in WEIGHT and item.get("category") in CATEGORIES
@@ -331,8 +338,9 @@ def to_markdown(review: Review) -> str:
 
 class CodeReview:
     name = "code_review"
-    description = ("Review source code for bugs, security issues, performance problems, bad naming, missing error "
-                   "handling and missing tests. Works on pasted code, an attached file or zip, or a GitHub URL.")
+    description = ("Review code the user supplied for bugs, security issues, performance problems, bad naming, "
+                   "missing error handling and missing tests. Use ONLY when the user asks for a review AND gave "
+                   "pasted code, an attached file or zip, or a GitHub URL. Never for general coding questions.")
     input_schema = Args
     permission = Permission.READ
 
@@ -348,7 +356,12 @@ class CodeReview:
         if not files:
             raise ValueError("no reviewable code files were found")
         static, not_run = await static_analysis(files)
-        issues = merge(static, await llm_issues(files, ctx))
+        try:
+            deep = await llm_issues(files, ctx, not_run)
+        except ProviderError:  # static findings are still worth returning
+            deep = []
+            not_run.append("LLM review (the language model is unavailable)")
+        issues = merge(static, deep)
         total, breakdown = score(issues)
         with SessionLocal() as db:
             review = Review(user_id=ctx.user_id, source=source, score=total, breakdown=breakdown,
