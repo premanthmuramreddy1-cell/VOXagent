@@ -1,0 +1,14 @@
+[
+  {"file": "sql_injection.py", "line": 3, "category": "security", "needs_llm": false},
+  {"file": "sql_injection.py", "line": 7, "category": "security", "needs_llm": false},
+  {"file": "undefined_name.py", "line": 4, "category": "bug", "needs_llm": false},
+  {"file": "undefined_name.py", "line": 11, "category": "error-handling", "needs_llm": false},
+  {"file": "eval_shell.py", "line": 5, "category": "security", "needs_llm": false},
+  {"file": "eval_shell.py", "line": 9, "category": "security", "needs_llm": false},
+  {"file": "mutable_default.py", "line": 1, "category": "bug", "needs_llm": false},
+  {"file": "mutable_default.py", "line": 7, "category": "bug", "needs_llm": false},
+  {"file": "leaky.js", "line": 1, "category": "security", "needs_llm": false},
+  {"file": "leaky.js", "line": 5, "category": "bug", "needs_llm": false},
+  {"file": "logic.py", "line": 2, "category": "bug", "needs_llm": true},
+  {"file": "logic.py", "line": 7, "category": "bug", "needs_llm": true}
+]

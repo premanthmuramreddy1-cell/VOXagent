@@ -1,0 +1,34 @@
+[project]
+name = "voxagent-backend"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "email-validator>=2.3.0",
+    "fastapi>=0.162.2",
+    "faster-whisper>=1.2.1",
+    "httpx>=0.28.1",
+    "mypy>=2.4.1",
+    "pydantic-settings>=2.16.2",
+    "pyjwt>=2.15.1",
+    "python-multipart>=0.0.33",
+    "ruff>=0.17.4",
+    "sqlalchemy>=2.1.8",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["evals/cases"]
+
+[tool.ruff.lint]
+# B008: FastAPI Depends() in defaults is the idiom. BLE001: broad excepts are deliberate and commented.
+ignore = ["B008", "BLE001", "RUF012", "SIM117", "SIM905", "UP047", "FURB167", "I001"]
