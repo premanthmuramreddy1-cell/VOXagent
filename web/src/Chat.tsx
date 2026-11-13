@@ -202,6 +202,17 @@ function Bubble({ item }: { item: Item }) {
                       <ExternalLink className="h-2.5 w-2.5" />
                     </a>
                   )}
+                  {tool.data?.checkout_url && (
+                    <a
+                      className="ml-1 inline-flex items-center gap-1 font-semibold text-accent underline hover:opacity-80"
+                      href={tool.data.checkout_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Review Cart & Checkout (${tool.data.total_estimated_cost})
+                      <ExternalLink className="h-2.5 w-2.5" />
+                    </a>
+                  )}
                 </div>
               )
             })}
