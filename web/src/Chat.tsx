@@ -321,7 +321,7 @@ export default function Chat() {
     setItems([])
     setConfirm(null)
     setBusy(false)
-    api(`/sessions/${current}/messages`).then((rows) => setItems(fromHistory(rows))).catch(() => {})
+    api(`/sessions/${current}/messages`).then((rows: any) => setItems(fromHistory(Array.isArray(rows) ? rows : []))).catch(() => {})
     const ws = new Socket(current, {
       onStatus: setOnline,
       onAudio: (wav) => speakRef.current && player.current.enqueue(wav),

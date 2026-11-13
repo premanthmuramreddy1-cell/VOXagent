@@ -117,12 +117,15 @@ export class Socket {
       }
       this.handlers.onEvent(event)
     }
-    ws.onclose = async (close) => {
+    ws.onclose = (close) => {
       if (this.closed) return
       this.handlers.onStatus(false)
-      if (close.code === 4401) await refresh() // the access token expired
-      setTimeout(() => this.open(), this.delay)
-      this.delay = Math.min(this.delay * 2, 10_000)
+      // Run async work in a detached promise so onclose itself returns void (not a Promise).
+      void (async () => {
+        if (close.code === 4401) await refresh() // the access token expired
+        setTimeout(() => this.open(), this.delay)
+        this.delay = Math.min(this.delay * 2, 10_000)
+      })()
     }
     this.ws = ws
   }
