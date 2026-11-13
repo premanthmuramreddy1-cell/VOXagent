@@ -171,51 +171,86 @@ function Bubble({ item }: { item: Item }) {
 
         {/* Tool Invocations */}
         {item.tools && item.tools.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {item.tools.map((tool, index) => {
-              const isRunning = tool.state === 'running'
-              const isOk = tool.state === 'ok'
-              const isFailed = tool.state === 'failed'
+          <div className="flex flex-col gap-2.5">
+            <div className="flex flex-wrap gap-2">
+              {item.tools.map((tool, index) => {
+                const isRunning = tool.state === 'running'
+                const isOk = tool.state === 'ok'
+                const isFailed = tool.state === 'failed'
 
-              return (
-                <div
-                  key={index}
-                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-xs shadow-xs ${
-                    isRunning
-                      ? 'border-accent/40 bg-accent-subtle text-accent'
-                      : isOk
-                      ? 'border-ok/30 bg-ok-subtle text-ok'
-                      : 'border-danger/30 bg-danger-subtle text-danger'
-                  }`}
-                >
-                  {isRunning && <Loader2 className="h-3 w-3 animate-spin" />}
-                  {isOk && <CheckCircle2 className="h-3 w-3" />}
-                  {isFailed && <XCircle className="h-3 w-3" />}
-                  <span className="font-semibold">{tool.skill}</span>
-                  {tool.error && <span className="text-danger">— {tool.error}</span>}
-                  {tool.data?.review_id && (
+                return (
+                  <div
+                    key={index}
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-xs shadow-xs ${
+                      isRunning
+                        ? 'border-accent/40 bg-accent-subtle text-accent'
+                        : isOk
+                        ? 'border-ok/30 bg-ok-subtle text-ok'
+                        : 'border-danger/30 bg-danger-subtle text-danger'
+                    }`}
+                  >
+                    {isRunning && <Loader2 className="h-3 w-3 animate-spin" />}
+                    {isOk && <CheckCircle2 className="h-3 w-3" />}
+                    {isFailed && <XCircle className="h-3 w-3" />}
+                    <span className="font-semibold">{tool.skill}</span>
+                    {tool.error && <span className="text-danger">— {tool.error}</span>}
+                    {tool.data?.review_id && (
+                      <a
+                        className="ml-1 inline-flex items-center gap-1 font-semibold underline hover:opacity-80"
+                        href={`#/reviews/${tool.data.review_id}`}
+                      >
+                        Report ({tool.data.score}/100)
+                        <ExternalLink className="h-2.5 w-2.5" />
+                      </a>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Thinking / Reasoning Breakdown */}
+            {item.tools?.some((t) => t.data?.thinking?.length > 0) && (
+              <div className="rounded-xl border border-line bg-surface/80 p-3.5 font-mono text-xs shadow-xs">
+                <div className="flex items-center gap-1.5 font-semibold text-muted">
+                  <Sparkles className="h-3.5 w-3.5 text-accent" />
+                  <span className="text-ink">Reasoning & Product Evaluation</span>
+                </div>
+                <ul className="mt-2.5 space-y-1.5 text-ink/80">
+                  {item.tools
+                    .flatMap((t) => t.data?.thinking || [])
+                    .map((step: string, idx: number) => (
+                      <li key={idx} className="flex items-start gap-2">
+                        <span className="text-accent font-bold">›</span>
+                        <span>{step}</span>
+                      </li>
+                    ))}
+                </ul>
+                {item.tools?.find((t) => t.data?.comparison)?.data?.comparison && (
+                  <div className="mt-2.5 border-t border-line/60 pt-2 text-[11px] text-muted italic">
+                    Decision factor: {item.tools.find((t) => t.data?.comparison)?.data?.comparison}
+                  </div>
+                )}
+                {item.tools?.find((t) => t.data?.checkout_url) && (
+                  <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-line/60 pt-3">
                     <a
-                      className="ml-1 inline-flex items-center gap-1 font-semibold underline hover:opacity-80"
-                      href={`#/reviews/${tool.data.review_id}`}
-                    >
-                      Report ({tool.data.score}/100)
-                      <ExternalLink className="h-2.5 w-2.5" />
-                    </a>
-                  )}
-                  {tool.data?.checkout_url && (
-                    <a
-                      className="ml-1 inline-flex items-center gap-1 font-semibold text-accent underline hover:opacity-80"
-                      href={tool.data.checkout_url}
+                      className="inline-flex items-center gap-2 rounded-lg bg-accent px-3.5 py-1.5 font-mono text-xs font-bold text-white shadow-xs transition hover:brightness-110"
+                      href={item.tools.find((t) => t.data?.checkout_url)?.data.checkout_url}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      Review Cart & Checkout (${tool.data.total_estimated_cost})
-                      <ExternalLink className="h-2.5 w-2.5" />
+                      <span>Open Checkout (${item.tools.find((t) => t.data?.checkout_url)?.data.total_estimated_cost})</span>
+                      <ExternalLink className="h-3.5 w-3.5" />
                     </a>
-                  )}
-                </div>
-              )
-            })}
+                    {item.tools.find((t) => t.data?.opened_in_browser)?.data.opened_in_browser && (
+                      <span className="flex items-center gap-1 text-[11px] text-ok">
+                        <CheckCircle2 className="h-3 w-3" />
+                        Tab opened on your Mac
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 

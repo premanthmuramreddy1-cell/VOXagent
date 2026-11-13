@@ -1,5 +1,5 @@
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -24,38 +24,53 @@ def mock_ctx():
         "retailer": "Amazon",
         "specs": "8K DPI sensor, Quiet clicks",
         "rating": 4.8,
+        "thinking": ["Analyzed ergonomic requirements", "Selected MX Master 3S for high rating and precision"],
+        "comparison": "Beat out vertical mouse due to sensor fidelity",
     })
     return ctx
 
 
 @pytest.mark.anyio
-async def test_shopping_prepares_cart_and_stops_before_checkout(mock_ctx):
-    res = await skill.run(Args(query="ergonomic mouse", quantity=2), mock_ctx)
+async def test_shopping_prepares_cart_opens_browser_and_stops_before_checkout(mock_ctx):
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        proc = AsyncMock()
+        proc.communicate.return_value = (b"", b"")
+        mock_exec.return_value = proc
 
-    assert "stopped right at the checkout screen" in res.summary
-    assert res.data["status"] == "STOPPED_BEFORE_CHECKOUT"
-    assert res.data["item"] == "Logitech MX Master 3S"
-    assert res.data["quantity"] == 2
-    assert res.data["subtotal"] == 199.98
-    assert res.data["requires_human_payment"] is True
-    assert "amazon.com" in res.data["checkout_url"]
+        res = await skill.run(Args(query="ergonomic mouse", quantity=2), mock_ctx)
 
-    # Verify event emitted to UI
-    mock_ctx.emit.assert_called_once_with(
-        "shopping.checkout_ready",
-        status="STOPPED_BEFORE_CHECKOUT",
-        item="Logitech MX Master 3S",
-        specs="8K DPI sensor, Quiet clicks",
-        unit_price=99.99,
-        quantity=2,
-        subtotal=199.98,
-        est_tax=16.00,
-        est_shipping=0.00,
-        total_estimated_cost=215.98,
-        retailer="Amazon",
-        checkout_url=res.data["checkout_url"],
-        requires_human_payment=True,
-    )
+        assert "opened your checkout cart directly in your browser" in res.summary
+        assert res.data["status"] == "STOPPED_BEFORE_CHECKOUT"
+        assert res.data["item"] == "Logitech MX Master 3S"
+        assert res.data["quantity"] == 2
+        assert res.data["subtotal"] == 199.98
+        assert res.data["requires_human_payment"] is True
+        assert res.data["opened_in_browser"] is True
+        assert len(res.data["thinking"]) >= 2
+        assert "amazon.com" in res.data["checkout_url"]
+
+        # Verify browser launch command called
+        mock_exec.assert_called_once_with("open", res.data["checkout_url"])
+
+        # Verify event emitted to UI
+        mock_ctx.emit.assert_called_once_with(
+            "shopping.checkout_ready",
+            status="STOPPED_BEFORE_CHECKOUT",
+            item="Logitech MX Master 3S",
+            specs="8K DPI sensor, Quiet clicks",
+            unit_price=99.99,
+            quantity=2,
+            subtotal=199.98,
+            est_tax=16.00,
+            est_shipping=0.00,
+            total_estimated_cost=215.98,
+            retailer="Amazon",
+            checkout_url=res.data["checkout_url"],
+            requires_human_payment=True,
+            thinking=res.data["thinking"],
+            comparison="Beat out vertical mouse due to sensor fidelity",
+            opened_in_browser=True,
+        )
 
 
 def test_shopping_permission_is_critical():
@@ -75,15 +90,21 @@ def test_generate_retailer_cart_urls():
 
 @pytest.mark.anyio
 async def test_shopping_fallback_when_llm_fails():
-    ctx = RunContext(
-        user_id="u1",
-        session_id="s1",
-        user_text="buy headphones",
-        upload_ids=[],
-        emit=AsyncMock(),
-        complete=AsyncMock(side_effect=ValueError("bad json")),
-    )
-    res = await skill.run(Args(query="headphones", max_price=50.0), ctx)
-    assert res.data["status"] == "STOPPED_BEFORE_CHECKOUT"
-    assert res.data["unit_price"] == 50.0
-    assert "stopped right at the checkout screen" in res.summary
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        proc = AsyncMock()
+        proc.communicate.return_value = (b"", b"")
+        mock_exec.return_value = proc
+
+        ctx = RunContext(
+            user_id="u1",
+            session_id="s1",
+            user_text="buy headphones",
+            upload_ids=[],
+            emit=AsyncMock(),
+            complete=AsyncMock(side_effect=ValueError("bad json")),
+        )
+        res = await skill.run(Args(query="headphones", max_price=50.0), ctx)
+        assert res.data["status"] == "STOPPED_BEFORE_CHECKOUT"
+        assert res.data["unit_price"] == 50.0
+        assert "opened your checkout cart directly in your browser" in res.summary
+        assert len(res.data["thinking"]) > 0
