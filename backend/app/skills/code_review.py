@@ -19,21 +19,13 @@ from app.db import Review, SessionLocal, User, record
 from app.providers import ProviderError
 from app.security import check_daily_limit
 from app.skills import Permission, RunContext, SkillResult
+from app.skills.analysis import deps
+from app.skills.analysis.base import CATEGORIES, WEIGHT, make_issue
 
+MANIFESTS = {"package.json", "go.mod", "Cargo.toml", "pyproject.toml"}
 CODE_EXT = {
     ".py", ".js", ".mjs", ".jsx", ".ts", ".tsx", ".java", ".c", ".h", ".cpp", ".hpp", ".go",
     ".rs", ".rb", ".php", ".cs", ".kt", ".swift", ".sh", ".sql", ".diff",
-}
-WEIGHT = {"critical": 25, "high": 12, "medium": 5, "low": 1}
-CATEGORIES = ["security", "bug", "performance", "error-handling", "naming", "tests", "style"]
-WHY = {
-    "security": "An attacker could use this to read data or run code.",
-    "bug": "The code can crash or give wrong results here.",
-    "performance": "This wastes time or memory as input grows.",
-    "error-handling": "Failures here are hidden or will surprise the caller.",
-    "naming": "Unclear names make the code harder to read and change.",
-    "tests": "Without tests, regressions here go unnoticed.",
-    "style": "It adds noise that makes real problems harder to spot.",
 }
 SECRETS = [
     (r"AKIA[0-9A-Z]{16}", "AWS access key"),
@@ -80,18 +72,18 @@ class Args(BaseModel):
     github_url: str = Field(default="", description="Public GitHub file, repository or pull request URL")
 
 
-def _issue(severity: str, category: str, file: str, line: int, explanation: str, fix: str, source: str,
-           why: str = "") -> dict[str, Any]:
-    return {
-        "severity": severity, "category": category, "file": file, "line": line,
-        "explanation": explanation, "why": why or WHY[category], "fix": fix, "source": source,
-    }
+_issue = make_issue
 
 
 # ---- inputs -----------------------------------------------------------------
 
+def _is_manifest(name: str) -> bool:
+    base = PurePosixPath(name).name
+    return base in MANIFESTS or (base.startswith("requirements") and base.endswith(".txt"))
+
+
 def _keep(name: str) -> bool:
-    return PurePosixPath(name).suffix.lower() in CODE_EXT or PurePosixPath(name).name == "requirements.txt"
+    return PurePosixPath(name).suffix.lower() in CODE_EXT or _is_manifest(name)
 
 
 def _unzip(blob: bytes) -> dict[str, str]:
@@ -261,7 +253,13 @@ def _safe(name: str) -> str:
 
 async def static_analysis(files: dict[str, str]) -> tuple[list[dict], list[str]]:
     """Run linters over a temp copy. They parse the code; none of them executes it."""
-    issues, not_run = scan_secrets(files), ["dependency vulnerability audit (needs a network advisory database)"]
+    issues, not_run = scan_secrets(files), []
+    if any(_is_manifest(f) for f in files):
+        dep_issues, dep_not_run = await deps.audit(files)
+        issues.extend(dep_issues)
+        not_run.extend(dep_not_run)
+    else:
+        not_run.append("dependency vulnerability audit (no package manifest found)")
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         for name, text in files.items():

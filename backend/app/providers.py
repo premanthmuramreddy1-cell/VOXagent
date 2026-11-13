@@ -99,7 +99,7 @@ class WhisperSTT:
 
     def _run(self, pcm: bytes, language: str | None) -> Transcript:
         import numpy as np
-        from faster_whisper import WhisperModel
+        from faster_whisper import WhisperModel  # type: ignore[import-untyped]
 
         if self._model is None:  # first use downloads the model, then it is cached on disk
             self._model = WhisperModel(self.size, device="cpu", compute_type="int8")

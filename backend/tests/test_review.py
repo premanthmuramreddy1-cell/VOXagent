@@ -8,7 +8,7 @@ from app import providers as prov
 from app.config import settings
 from app.db import record
 from app.skills import RunContext
-from app.skills.code_review import Args, _from_github, gather, scan_secrets, score
+from app.skills.code_review import Args, _from_github, gather, scan_secrets, score, static_analysis
 from evals.run import evaluate
 from tests.conftest import signup
 from tests.fakes import FakeLLM, FakeSTT, FakeTTS
@@ -145,3 +145,10 @@ def test_usage_admin_and_metrics(client, auth, fake):
     record("stt", "u1", latency_ms=120)
     assert client.get("/metrics", headers=admin).json()["stt"] == {"count": 1, "p50": 120, "p95": 120}
     assert client.get("/skills", headers=auth).json()[0]["name"] == "code_review"
+
+
+def test_review_with_manifest_audits_dependencies():
+    files = {"requirements.txt": "requests\n"}
+    issues, notrun = asyncio.run(static_analysis(files))
+    assert notrun == []
+    assert any("not pinned" in i["explanation"] for i in issues)
