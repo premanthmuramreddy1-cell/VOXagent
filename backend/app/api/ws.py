@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
+from app import personal
 from app import providers as prov
 from app.agent import Agent, Turn
 from app.config import settings
@@ -32,6 +33,8 @@ log = logging.getLogger("vox")
 SENTENCE = re.compile(r"\s*(.+?[.!?।:\n])(?=\s)", re.S)
 BYTES_PER_S = prov.SAMPLE_RATE * 2
 SORRY = "Sorry, I didn't catch that. Could you say it again?"
+CHANNEL_TTL_S = 3600
+MAX_CHANNELS = 200
 
 
 class Channel:
@@ -47,8 +50,13 @@ class Channel:
         self.audio = bytearray()
         self.recording = False
         self.partial_at = 0
+        self.updated_at = time.monotonic()
+
+    def touch(self) -> None:
+        self.updated_at = time.monotonic()
 
     async def emit(self, type: str, **payload: Any) -> None:
+        self.touch()
         self.seq += 1
         event = {"type": type, "seq": self.seq, **payload}
         self.events.append(event)
@@ -84,6 +92,24 @@ class Channel:
 _channels: dict[str, Channel] = {}
 
 
+def _prune_channels() -> None:
+    """Evict stale disconnected channels so process memory stays bounded."""
+    now = time.monotonic()
+    stale = [
+        sid for sid, ch in _channels.items()
+        if ch.ws is None and (ch.turn is None or ch.turn.done()) and (now - ch.updated_at > CHANNEL_TTL_S)
+    ]
+    for sid in stale:
+        _channels.pop(sid, None)
+    if len(_channels) > MAX_CHANNELS:
+        inactive = sorted(
+            (sid for sid, ch in _channels.items() if ch.ws is None and (ch.turn is None or ch.turn.done())),
+            key=lambda sid: _channels[sid].updated_at,
+        )
+        for sid in inactive[: len(_channels) - MAX_CHANNELS]:
+            _channels.pop(sid, None)
+
+
 class Speaker:
     """Wraps emit: turns streamed answer text into speech sentence by sentence."""
 
@@ -108,6 +134,8 @@ class Speaker:
 
     def _say(self, text: str) -> None:
         """Queue text for speech, skipping fenced code blocks: code is shown, not read aloud."""
+        if not self.enabled:
+            return
         for part in text.split("```"):
             if not self.in_code and part.strip():
                 self.queue.put_nowait(part.strip())
@@ -116,8 +144,9 @@ class Speaker:
 
     async def finish(self) -> None:
         if self.worker:
-            self._say(self.buffer)
-            self.queue.put_nowait(None)
+            if self.enabled:
+                self._say(self.buffer)
+                self.queue.put_nowait(None)
             await self.worker
 
     def cancel(self) -> None:
@@ -131,7 +160,13 @@ class Speaker:
                 wav, name = await prov.first_ok(
                     "tts", prov.providers().tts, lambda p, t=text: p.synthesize(t, self.language)  # type: ignore[misc]
                 )
-            except prov.ProviderError:  # the written answer is still shown
+            except prov.ProviderError:  # the written answer is still shown; disable further queueing
+                self.enabled = False
+                while not self.queue.empty():
+                    try:
+                        self.queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
                 await self.channel.emit("error", code="tts_failed", retryable=False, message="Speech is unavailable.")
                 return
             record("tts", self.user_id, name, len(text), round((time.perf_counter() - start) * 1000))
@@ -180,7 +215,10 @@ async def _turn(channel: Channel, user: User, session_id: str, text: str, pcm: b
         return
     history = _save_user_message(user, session_id, text)
     agent = Agent(prov.providers().llm, discover())
-    turn = Turn(user.id, session_id, text, speaker.emit, channel.confirm, upload_ids, history, language, user.name)
+    with SessionLocal() as db:
+        context = personal.context_for(db, user.id)
+    turn = Turn(user.id, session_id, text, speaker.emit, channel.confirm, upload_ids, history, language, user.name,
+                context)
     answer, plan = await agent.run(turn)
     with SessionLocal() as db:
         db.add(Message(session_id=session_id, role="assistant", text=answer, language=plan["language"], plan=plan))
@@ -207,7 +245,7 @@ async def run_turn(channel: Channel, user: User, session_id: str, text: str, pcm
         await channel.emit("error", code="internal", retryable=True, message="Something went wrong. Please try again.")
     finally:
         speaker.cancel()
-    await channel.emit("turn.done")
+        await channel.emit("turn.done")
 
 
 async def _partial(channel: Channel) -> None:
@@ -223,6 +261,7 @@ async def _partial(channel: Channel) -> None:
 async def _on_audio(channel: Channel, chunk: bytes) -> None:
     if not channel.recording:
         return
+    channel.touch()
     channel.audio += chunk
     if len(channel.audio) > settings().max_audio_s * BYTES_PER_S:
         channel.recording = False
@@ -238,6 +277,7 @@ async def _on_audio(channel: Channel, chunk: bytes) -> None:
 
 
 async def _dispatch(channel: Channel, user: User, session_id: str, msg: dict) -> None:
+    channel.touch()
     kind = msg.get("type")
     if kind == "resume":
         for event in [e for e in channel.events if e["seq"] > int(msg.get("last_seq", 0))]:
@@ -260,10 +300,18 @@ async def _dispatch(channel: Channel, user: User, session_id: str, msg: dict) ->
         channel.recording = False
         if not channel.cancel_turn():
             await channel.emit("tts.stop")
-    elif kind == "confirm" and channel.pending and channel.pending[0] == msg.get("id"):
-        if not channel.pending[1].done():
-            channel.pending[1].set_result(str(msg.get("decision", "no")).lower())
-    elif kind != "confirm":
+    elif kind == "confirm":
+        if channel.pending and channel.pending[0] == msg.get("id"):
+            if not channel.pending[1].done():
+                channel.pending[1].set_result(str(msg.get("decision", "no")).lower())
+        else:
+            await channel.emit(
+                "error",
+                code="confirm_expired",
+                retryable=False,
+                message="Confirmation request expired or is no longer active.",
+            )
+    else:
         await channel.send({"type": "error", "code": "bad_message", "retryable": False, "message": "Unknown message."})
 
 
@@ -275,12 +323,14 @@ async def voice(ws: WebSocket, session_id: str) -> None:
         with SessionLocal() as db:
             user = user_from_token(str(hello.get("token", "")), db)
             chat = db.get(ChatSession, session_id)
-        if not chat or chat.user_id != user.id:
-            raise HTTPException(404)
+            if not chat or chat.user_id != user.id:
+                raise HTTPException(404)
     except (HTTPException, TimeoutError, ValueError, AttributeError, WebSocketDisconnect):
         await ws.close(4401)
         return
+    _prune_channels()
     channel = _channels.setdefault(session_id, Channel())
+    channel.touch()
     channel.ws = ws
     await ws.send_json({"type": "ready", "seq": channel.seq})
     try:
@@ -299,5 +349,7 @@ async def voice(ws: WebSocket, session_id: str) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        channel.touch()
         if channel.ws is ws:
             channel.ws = None
+        _prune_channels()

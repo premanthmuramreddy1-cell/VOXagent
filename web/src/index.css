@@ -124,6 +124,24 @@ body {
   }
 }
 
+/* Code editor: a transparent textarea over a highlighted <pre>, same metrics so the caret lines up. */
+.code-layer {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 20px;
+  tab-size: 4;
+  white-space: pre;
+  padding: 12px 16px;
+  margin: 0;
+}
+.tok-kw { color: var(--accent); font-weight: 600; }
+.tok-str { color: var(--ok); }
+.tok-com { color: var(--muted); font-style: italic; }
+.tok-num { color: var(--danger); }
+.tok-fn { color: var(--ink); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.diff-add { background: var(--ok-subtle); color: var(--ok); }
+.diff-del { background: var(--danger-subtle); color: var(--danger); }
+
 @keyframes pulse-ring {
   0% { transform: scale(0.96); opacity: 0.9; }
   50% { transform: scale(1.16); opacity: 0.35; }

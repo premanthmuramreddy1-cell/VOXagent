@@ -45,11 +45,37 @@ export async function api<T = any>(path: string, init: RequestInit = {}, retry =
   return body
 }
 
+/** Authenticated fetch that returns the Response itself: for zip downloads and streamed output. */
+export async function raw(path: string, init: RequestInit = {}, retry = true): Promise<Response> {
+  const headers = new Headers(init.headers)
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  if (typeof init.body === 'string') headers.set('Content-Type', 'application/json')
+  const response = await fetch(path, { ...init, headers })
+  if (response.status === 401 && retry && (await refresh())) return raw(path, init, false)
+  if (!response.ok) {
+    const text = await response.text()
+    let detail = text
+    try {
+      detail = JSON.parse(text).detail ?? text
+    } catch {
+      /* plain-text error */
+    }
+    throw new Error(typeof detail === 'string' && detail ? detail : `Request failed (${response.status})`)
+  }
+  return response
+}
+
 export const post = <T = any>(path: string, body?: unknown) =>
   api<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
 
 export async function sign(mode: 'login' | 'signup', email: string, password: string, name: string): Promise<User> {
   const body = await post(`/auth/${mode}`, { email, password, name })
+  token = body.access_token
+  return body.user
+}
+
+export async function googleSign(credential: string): Promise<User> {
+  const body = await post('/auth/google', { credential })
   token = body.access_token
   return body.user
 }

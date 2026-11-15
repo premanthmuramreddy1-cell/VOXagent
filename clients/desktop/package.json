@@ -1,0 +1,20 @@
+{
+  "name": "voxagent-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VoxAgent desktop client: the same web app in a window, with a global push-to-talk shortcut.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac --win --linux"
+  },
+  "devDependencies": {
+    "electron": "39.8.10",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "app.voxagent.desktop",
+    "productName": "VoxAgent",
+    "files": ["main.js", "preload.js"]
+  }
+}

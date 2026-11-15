@@ -123,6 +123,102 @@ class ErrorEvent(Base):
     ts: Mapped[datetime] = mapped_column(default=now, index=True)
 
 
+class Workspace(Base):
+    __tablename__ = "workspaces"
+    id: Mapped[str] = _pk()
+    user_id: Mapped[str] = _fk("users.id")
+    name: Mapped[str]
+    opened_at: Mapped[datetime] = mapped_column(default=now, index=True)
+    created_at: Mapped[datetime] = mapped_column(default=now)
+
+
+class PendingChange(Base):
+    """A staged file change waiting for the user to accept or reject it."""
+    __tablename__ = "pending_changes"
+    id: Mapped[str] = _pk()
+    workspace_id: Mapped[str] = _fk("workspaces.id")
+    kind: Mapped[str]  # write | delete | rename
+    path: Mapped[str]
+    new_path: Mapped[str] = mapped_column(default="")
+    content: Mapped[str | None] = mapped_column(Text, default=None)
+    diff: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(default=now)
+
+
+class Memory(Base):
+    __tablename__ = "memories"
+    id: Mapped[str] = _pk()
+    user_id: Mapped[str] = _fk("users.id")
+    kind: Mapped[str] = mapped_column(default="fact")  # preference | fact | style
+    text: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(default=now)
+
+
+class Note(Base):
+    __tablename__ = "notes"
+    id: Mapped[str] = _pk()
+    user_id: Mapped[str] = _fk("users.id")
+    text: Mapped[str] = mapped_column(Text)
+    tags: Mapped[list[Any]] = mapped_column(default=list)
+    created_at: Mapped[datetime] = mapped_column(default=now, index=True)
+
+
+class Reminder(Base):
+    __tablename__ = "reminders"
+    id: Mapped[str] = _pk()
+    user_id: Mapped[str] = _fk("users.id")
+    text: Mapped[str]
+    due_at: Mapped[datetime] = mapped_column(index=True)
+    repeat: Mapped[str] = mapped_column(default="")  # "" | daily | weekdays | weekly
+    done: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(default=now)
+
+
+class Secret(Base):
+    """Encrypted per-user credentials (OAuth tokens, GitHub token, form profile)."""
+    __tablename__ = "secrets"
+    id: Mapped[str] = _pk()
+    user_id: Mapped[str] = _fk("users.id")
+    kind: Mapped[str] = mapped_column(index=True)  # github | google | profile | ...
+    blob: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(default=now)
+
+
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+    id: Mapped[str] = _pk()
+    user_id: Mapped[str] = _fk("users.id")
+    endpoint: Mapped[str] = mapped_column(Text)
+    p256dh: Mapped[str]
+    auth: Mapped[str]
+
+
+class BotLink(Base):
+    """Links a Telegram chat or WhatsApp number to a VoxAgent account."""
+    __tablename__ = "bot_links"
+    id: Mapped[str] = _pk()
+    user_id: Mapped[str] = _fk("users.id")
+    platform: Mapped[str]  # telegram | whatsapp
+    external_id: Mapped[str] = mapped_column(index=True)
+    session_id: Mapped[str] = mapped_column(default="")
+    created_at: Mapped[datetime] = mapped_column(default=now)
+
+
+class UserSetting(Base):
+    __tablename__ = "user_settings"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    tz: Mapped[str] = mapped_column(default="UTC")  # IANA zone the browser reports
+    briefing: Mapped[bool] = mapped_column(default=True)  # daily spoken briefing push
+    last_briefing: Mapped[str] = mapped_column(default="")  # local date of the last one sent
+
+
+class LinkCode(Base):
+    __tablename__ = "link_codes"
+    code: Mapped[str] = mapped_column(String(16), primary_key=True)
+    user_id: Mapped[str] = _fk("users.id")
+    expires_at: Mapped[datetime]
+
+
 def _engine():
     url = settings().database_url
     if url.startswith("sqlite"):

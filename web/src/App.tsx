@@ -1,11 +1,17 @@
 import { useEffect, useState } from 'react'
 import type { User } from './api'
-import { api, download, logout, refresh, sign } from './api'
+import { api, download, googleSign, logout, refresh, sign } from './api'
+import GoogleButton from './GoogleButton'
+import WorkspaceView from './Workspace'
+import Assistant from './Assistant'
+import Integrations from './Integrations'
 import Chat from './Chat'
 import Reviews, { SharedReview } from './Review'
 import {
   MessageSquare,
   FileCode2,
+  FolderGit2,
+  NotebookPen,
   User as UserIcon,
   ShieldAlert,
   Sun,
@@ -41,7 +47,7 @@ function useHash() {
   return hash.replace(/^#\/?/, '').split('/')
 }
 
-function Logo({ className = '' }: { className?: string }) {
+function Logo({ className = '', compact = false }: { className?: string; compact?: boolean }) {
   return (
     <div className={`flex items-center gap-2.5 select-none ${className}`}>
       <div className="relative flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-accent/90 to-accent text-surface shadow-xs">
@@ -52,7 +58,7 @@ function Logo({ className = '' }: { className?: string }) {
           <span className="h-3 w-0.5 rounded-full bg-surface"></span>
         </div>
       </div>
-      <div className="flex flex-col">
+      <div className={compact ? 'hidden flex-col sm:flex' : 'flex flex-col'}>
         <span className="font-mono text-xs font-bold tracking-tight text-ink">VOXAGENT</span>
         <span className="font-mono text-[9px] uppercase tracking-widest text-muted">Voice Terminal</span>
       </div>
@@ -80,7 +86,7 @@ function Login({ onUser }: { onUser: (user: User) => void }) {
   }
 
   return (
-    <main className="relative flex min-h-full items-center justify-center px-4 py-12">
+    <main className="relative flex min-h-full items-center justify-center overflow-hidden px-4 py-12">
       {/* Subtle ambient background glow */}
       <div className="pointer-events-none absolute -top-24 left-1/2 -z-10 h-96 w-96 -translate-x-1/2 rounded-full bg-accent/10 blur-3xl" />
 
@@ -195,6 +201,17 @@ function Login({ onUser }: { onUser: (user: User) => void }) {
               )}
             </button>
           </form>
+
+          <GoogleButton
+            onCredential={async (credential) => {
+              setError('')
+              try {
+                onUser(await googleSign(credential))
+              } catch (e) {
+                setError((e as Error).message)
+              }
+            }}
+          />
 
           {/* Quick info badges */}
           <div className="mt-6 border-t border-line pt-5 text-center">
@@ -338,6 +355,8 @@ function Account({ user, onUser }: { user: User; onUser: (user: User | null) => 
           </div>
         </div>
       )}
+
+      <Integrations />
 
       {/* Danger Zone & Actions */}
       <div className="panel p-6">
@@ -509,6 +528,11 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    // reminders and the morning briefing run in the user's own time zone
+    if (user) api('/me/settings', { method: 'PUT', body: JSON.stringify({ tz: Intl.DateTimeFormat().resolvedOptions().timeZone }) }).catch(() => {})
+  }, [user])
+
+  useEffect(() => {
     document.documentElement.dataset.theme = localStorage.theme = dark ? 'dark' : 'light'
   }, [dark])
 
@@ -527,7 +551,9 @@ export default function App() {
 
   const links = [
     ['', 'Talk', MessageSquare],
+    ['workspace', 'Workspace', FolderGit2],
     ['reviews', 'Reviews', FileCode2],
+    ['me', 'Notes', NotebookPen],
     ['account', 'Account', UserIcon],
     ...(user.is_admin ? [['admin', 'Admin', ShieldAlert] as const] : []),
   ] as const
@@ -536,9 +562,9 @@ export default function App() {
     <div className="flex h-full flex-col bg-surface text-ink overflow-hidden">
       {/* Top Navigation Bar */}
       <header className="no-print sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-line bg-surface/85 px-4 sm:px-6 backdrop-blur-md">
-        <div className="flex items-center gap-6">
-          <Logo />
-          <nav className="flex items-center gap-1" aria-label="Main navigation">
+        <div className="flex min-w-0 items-center gap-3 md:gap-6">
+          <Logo compact />
+          <nav className="flex min-w-0 items-center gap-1 overflow-x-auto" aria-label="Main navigation">
             {links.map(([path, name, Icon]) => {
               const active = page === path
               return (
@@ -546,14 +572,16 @@ export default function App() {
                   key={path}
                   href={`#/${path}`}
                   aria-current={active ? 'page' : undefined}
-                  className={`flex h-9 items-center gap-1.5 rounded-xl px-3 font-mono text-xs font-semibold transition-all ${
+                  aria-label={name}
+                  title={name}
+                  className={`flex h-9 min-w-9 shrink-0 items-center justify-center gap-1.5 rounded-xl px-2.5 font-mono text-xs font-semibold transition-all md:px-3 ${
                     active
                       ? 'border border-line bg-raised text-ink shadow-xs'
                       : 'text-muted hover:bg-raised/60 hover:text-ink'
                   }`}
                 >
                   <Icon className="h-3.5 w-3.5" />
-                  <span>{name}</span>
+                  <span className="hidden md:inline">{name}</span>
                 </a>
               )
             })}
@@ -562,7 +590,7 @@ export default function App() {
 
         <div className="flex items-center gap-2">
           {/* User profile tag */}
-          <div className="hidden h-9 items-center gap-2 rounded-xl border border-line bg-raised/60 px-3 sm:flex">
+          <div className="hidden h-9 items-center gap-2 rounded-xl border border-line bg-raised/60 px-3 lg:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-ok" />
             <span className="font-mono text-xs text-muted truncate max-w-40">{user.email}</span>
           </div>
@@ -580,7 +608,13 @@ export default function App() {
 
       {/* Main View Area */}
       <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
-        {page === 'reviews' ? (
+        {page === 'workspace' ? (
+          <WorkspaceView />
+        ) : page === 'me' ? (
+          <div className="flex-1 overflow-y-auto">
+            <Assistant />
+          </div>
+        ) : page === 'reviews' ? (
           <div className="flex-1 overflow-y-auto">
             <Reviews id={arg} />
           </div>

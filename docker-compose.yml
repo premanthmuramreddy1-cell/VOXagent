@@ -1,0 +1,46 @@
+# Local stack: docker compose up --build   then open http://localhost:8080
+# Needs backend/.env (copy backend/.env.example). Ollama runs on the host; the API reaches it via host.docker.internal.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vox
+      POSTGRES_PASSWORD: vox
+      POSTGRES_DB: voxagent
+    volumes: [db:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vox"]
+      interval: 5s
+
+  api:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      VOX_DATABASE_URL: postgresql+psycopg://vox:vox@db:5432/voxagent
+      VOX_OLLAMA_URL: http://host.docker.internal:11434
+      VOX_PUBLIC_URL: http://localhost:8080
+      VOX_SANDBOX: docker
+      VOX_COOKIE_SECURE: "false"
+    volumes:
+      - data:/data
+      # The API starts sandbox containers through the host's Docker. This socket is powerful: in production,
+      # point VOX_SANDBOX at a dedicated sandbox host or microVM service instead of mounting it.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      db: {condition: service_healthy}
+      sandbox-image: {condition: service_completed_successfully}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  web:
+    build: ./web
+    ports: ["8080:8080"]
+    depends_on: [api]
+
+  sandbox-image:
+    build: ./sandbox
+    image: voxagent-sandbox:latest
+    command: ["true"]
+
+volumes:
+  db:
+  data:

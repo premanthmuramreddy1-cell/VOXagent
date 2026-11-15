@@ -1,0 +1,244 @@
+"""Memory, notes, reminders, settings, push subscriptions and the encrypted form-filling profile."""
+
+import re
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app import personal, push
+from app.crypto import load_secret, save_secret
+from app.db import Memory, Note, PushSubscription, Reminder, User, get_db, now
+from app.security import current_user
+
+router = APIRouter()
+
+SENSITIVE_KEY = re.compile(r"pass(word)?|pwd|card|cvv|cvc|iban|ssn|aadhaar|pan|routing|account.?number|pin\b|otp",
+                           re.IGNORECASE)
+
+
+def _luhn(digits: str) -> bool:
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        n = int(ch) * (2 if i % 2 else 1)
+        total += n - 9 if n > 9 else n
+    return total % 10 == 0
+
+
+def looks_sensitive(key: str, value: str) -> bool:
+    """Passwords and card numbers are never stored, whatever the field is called."""
+    digits = re.sub(r"[\s-]", "", value)
+    return bool(SENSITIVE_KEY.search(key)) or (digits.isdigit() and 13 <= len(digits) <= 19 and _luhn(digits))
+
+
+def _own(db: Session, model: type, ident: str, user: User):
+    row = db.get(model, ident)
+    if not row or row.user_id != user.id:
+        raise HTTPException(404, "not found")
+    return row
+
+
+# ---------------------------------------------------------------- settings
+
+class SettingsBody(BaseModel):
+    tz: str | None = None
+    briefing: bool | None = None
+
+
+@router.get("/me/settings")
+def get_settings(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    row = personal.user_settings(db, user.id)
+    return {"tz": row.tz, "briefing": row.briefing}
+
+
+@router.put("/me/settings")
+def put_settings(body: SettingsBody, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    row = personal.user_settings(db, user.id)
+    if body.tz is not None:
+        try:
+            ZoneInfo(body.tz)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise HTTPException(422, "unknown time zone") from None
+        row.tz = body.tz
+    if body.briefing is not None:
+        row.briefing = body.briefing
+    db.commit()
+    return {"tz": row.tz, "briefing": row.briefing}
+
+
+# ---------------------------------------------------------------- memory (view, edit, delete)
+
+class MemoryBody(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    kind: str = Field(default="fact", pattern="^(preference|fact|style)$")
+
+
+def _memory(m: Memory) -> dict:
+    return {"id": m.id, "kind": m.kind, "text": m.text, "updated_at": m.updated_at.isoformat()}
+
+
+@router.get("/memory")
+def list_memory(user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
+    return [_memory(m) for m in db.scalars(select(Memory).where(Memory.user_id == user.id)
+                                            .order_by(Memory.updated_at.desc()))]
+
+
+@router.post("/memory")
+def add_memory(body: MemoryBody, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    row = Memory(user_id=user.id, text=body.text.strip(), kind=body.kind)
+    db.add(row)
+    db.commit()
+    return _memory(row)
+
+
+@router.put("/memory/{memory_id}")
+def edit_memory(memory_id: str, body: MemoryBody, user: User = Depends(current_user),
+                db: Session = Depends(get_db)) -> dict:
+    row = _own(db, Memory, memory_id, user)
+    row.text, row.kind, row.updated_at = body.text.strip(), body.kind, now()
+    db.commit()
+    return _memory(row)
+
+
+@router.delete("/memory/{memory_id}")
+def delete_memory(memory_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    db.delete(_own(db, Memory, memory_id, user))
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- notes
+
+class NoteBody(BaseModel):
+    text: str = Field(min_length=1, max_length=10_000)
+
+
+def _note(n: Note) -> dict:
+    return {"id": n.id, "text": n.text, "tags": n.tags, "created_at": n.created_at.isoformat()}
+
+
+@router.get("/notes")
+def list_notes(q: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
+    if q.strip():
+        return [_note(n) for n in personal.search_notes(db, user.id, q, 50)]
+    return [_note(n) for n in db.scalars(select(Note).where(Note.user_id == user.id)
+                                          .order_by(Note.created_at.desc()).limit(100))]
+
+
+@router.post("/notes")
+def add_note(body: NoteBody, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    row = Note(user_id=user.id, text=body.text.strip(), tags=personal.auto_tags(body.text))
+    db.add(row)
+    db.commit()
+    return _note(row)
+
+
+@router.delete("/notes/{note_id}")
+def delete_note(note_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    db.delete(_own(db, Note, note_id, user))
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- reminders
+
+class ReminderBody(BaseModel):
+    text: str = Field(min_length=1, max_length=300)
+    when: str = Field(description="Local ISO date-time, e.g. 2026-11-16T09:00")
+    repeat: str = Field(default="", pattern="^(|daily|weekdays|weekly)$")
+
+
+def _reminder(r: Reminder, db: Session) -> dict:
+    tz = personal.zone(db, r.user_id)
+    return {"id": r.id, "text": r.text, "due": personal.to_local(r.due_at, tz).isoformat(), "repeat": r.repeat,
+            "done": r.done}
+
+
+@router.get("/reminders")
+def list_reminders(user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.scalars(select(Reminder).where(Reminder.user_id == user.id, Reminder.done.is_(False))
+                      .order_by(Reminder.due_at))
+    return [_reminder(r, db) for r in rows]
+
+
+@router.post("/reminders")
+def add_reminder(body: ReminderBody, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    try:
+        due = personal.to_utc(body.when, personal.zone(db, user.id))
+    except ValueError:
+        raise HTTPException(422, "use a date and time like 2026-11-16T09:00") from None
+    row = Reminder(user_id=user.id, text=body.text.strip(), due_at=due, repeat=body.repeat)
+    db.add(row)
+    db.commit()
+    return _reminder(row, db)
+
+
+@router.post("/reminders/{reminder_id}/done")
+def finish_reminder(reminder_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    row = _own(db, Reminder, reminder_id, user)
+    row.done = True
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/reminders/{reminder_id}")
+def delete_reminder(reminder_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    db.delete(_own(db, Reminder, reminder_id, user))
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/reminders/briefing")
+def get_briefing(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    return {"text": personal.briefing(db, user.id)}
+
+
+# ---------------------------------------------------------------- push
+
+class PushBody(BaseModel):
+    endpoint: str = Field(pattern=r"^https://")
+    keys: dict[str, str]
+
+
+@router.get("/push/key")
+def push_key() -> dict:
+    return {"key": push.public_key()}
+
+
+@router.post("/push/subscribe")
+def subscribe(body: PushBody, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    if not {"p256dh", "auth"} <= body.keys.keys():
+        raise HTTPException(422, "subscription keys missing")
+    existing = db.scalar(select(PushSubscription).where(PushSubscription.endpoint == body.endpoint))
+    if existing:
+        db.delete(existing)
+    db.add(PushSubscription(user_id=user.id, endpoint=body.endpoint, p256dh=body.keys["p256dh"],
+                            auth=body.keys["auth"]))
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/push/test")
+async def push_test(user: User = Depends(current_user)) -> dict:
+    return {"sent": await push.notify(user.id, "VoxAgent", "Notifications are working.", "/#/me")}
+
+
+# ---------------------------------------------------------------- form-filling profile (encrypted)
+
+@router.get("/me/profile")
+def get_profile(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    return load_secret(db, user.id, "profile") or {}
+
+
+@router.put("/me/profile")
+def put_profile(body: dict[str, str], user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    if len(body) > 60 or any(len(k) > 60 or len(v) > 500 for k, v in body.items()):
+        raise HTTPException(413, "profile is too large")
+    refused = [k for k, v in body.items() if looks_sensitive(k, v)]
+    if refused:
+        raise HTTPException(422, f"passwords and card numbers are never stored: {', '.join(refused)}")
+    clean = {k.strip(): v.strip() for k, v in body.items() if k.strip() and v.strip()}
+    save_secret(db, user.id, "profile", clean)
+    return clean

@@ -14,9 +14,13 @@ class Settings(BaseSettings):
 
     access_ttl_s: int = 900
     refresh_ttl_s: int = 30 * 86400
+    google_client_id: str = ""  # OAuth web client id; empty turns Google sign-in off
 
     # Providers, swappable by config. "a,b" means: try a, fall back to b.
-    llm: str = "ollama:llama3.2,ollama:qwen3-vl:8b-instruct"
+    # cloud:<model> is any OpenAI-compatible API; Z.ai's glm-4.5-flash is free.
+    llm: str = "cloud:glm-4.5-flash,ollama:llama3.2"
+    llm_api_key: str = ""  # free key from z.ai, Groq, OpenRouter, Gemini, ...
+    llm_base_url: str = "https://api.z.ai/api/paas/v4"
     stt: str = "whisper:small"
     tts: str = "say"
     ollama_url: str = "http://localhost:11434"
@@ -27,6 +31,42 @@ class Settings(BaseSettings):
     max_text_chars: int = 4_000
     max_audio_s: int = 60
     agent_max_steps: int = 4
+
+    max_workspace_bytes: int = 50_000_000
+    public_url: str = "http://localhost:5173"  # where users reach the app; used for links and OAuth redirects
+
+    # Sandbox for running user code. docker = isolated container (production);
+    # seatbelt = macOS sandbox-exec profile (dev on a Mac without Docker); off = running code is disabled.
+    sandbox: str = "docker"
+    sandbox_image: str = "voxagent-sandbox:latest"
+    sandbox_cpus: float = 1.0
+    sandbox_memory_mb: int = 1024
+    sandbox_timeout_s: int = 120
+    sandbox_idle_s: int = 900
+    sandbox_output_chars: int = 20_000
+    fix_attempts: int = 3
+    tunnel: str = ""  # "cloudflared" exposes previews on a public trycloudflare.com URL
+
+    # Web access. search: duckduckgo (no key) or searxng:<base url>.
+    web_search: str = "duckduckgo"
+    web_fetch_bytes: int = 2_000_000
+
+    # Integrations, each off until configured.
+    google_client_secret: str = ""  # Gmail + Calendar connection (same OAuth client as sign-in)
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    deploy_provider: str = ""  # render:<deploy hook url> | vercel (needs the vercel CLI and VERCEL_TOKEN)
+    telegram_token: str = ""
+    whatsapp_token: str = ""
+    whatsapp_phone_id: str = ""
+    whatsapp_verify_token: str = ""
+    whatsapp_app_secret: str = ""  # verifies X-Hub-Signature-256 on webhook calls
+    vapid_private_key: str = ""  # web push; generate with: uv run python -m app.push keys
+    vapid_subject: str = "mailto:admin@voxagent.local"
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_price_id: str = ""
+    briefing_hour: int = 8  # local hour for the daily spoken briefing push
 
     free_daily_messages: int = 100
     free_daily_reviews: int = 10

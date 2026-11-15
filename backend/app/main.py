@@ -5,7 +5,8 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, routes, ws
+from app import background
+from app.api import auth, integrations, personal, routes, workspaces, ws
 from app.config import settings
 
 
@@ -21,13 +22,14 @@ handler.setFormatter(JsonFormatter())
 logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 log = logging.getLogger("vox")
 
-app = FastAPI(title="VoxAgent")
+app = FastAPI(title="VoxAgent", lifespan=background.running)
 app.add_middleware(
     CORSMiddleware, allow_origins=settings().cors_origins, allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
 )
-for module in (auth, routes, ws):
+for module in (auth, routes, workspaces, personal, integrations, ws):
     app.include_router(module.router)
+app.include_router(workspaces.preview)
 
 
 @app.middleware("http")

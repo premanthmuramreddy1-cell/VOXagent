@@ -1,3 +1,9 @@
+import asyncio
+from unittest.mock import AsyncMock
+
+import httpx
+
+from app.api import auth as auth_api
 from app.config import settings
 from app.security import _hits
 from tests.conftest import signup
@@ -63,3 +69,39 @@ def test_auth_endpoints_are_rate_limited(client, monkeypatch):
     ]
     assert codes == [401, 401, 429]
     _hits.clear()
+
+
+def _claims(**over):
+    return {"aud": "cid", "iss": "https://accounts.google.com", "email": "g@example.com",
+            "email_verified": "true", "name": "Gita", **over}
+
+
+def test_google_login_creates_then_reuses_the_account(client, monkeypatch):
+    monkeypatch.setattr(settings(), "google_client_id", "cid")
+    monkeypatch.setattr(auth_api, "_google_claims", AsyncMock(return_value=_claims()))
+    first = client.post("/auth/google", json={"credential": "tok"})
+    assert first.status_code == 200 and first.json()["user"]["name"] == "Gita"
+    again = client.post("/auth/google", json={"credential": "tok"})
+    assert again.json()["user"]["id"] == first.json()["user"]["id"]
+    # a Google-only account has no password, so password login must fail
+    assert client.post("/auth/login", json={"email": "g@example.com", "password": "password123"}).status_code == 401
+
+
+def test_google_login_rejects_bad_tokens(client, monkeypatch):
+    monkeypatch.setattr(settings(), "google_client_id", "cid")
+    for bad in (_claims(aud="someone-else"), _claims(email_verified="false"), _claims(iss="evil.com")):
+        monkeypatch.setattr(auth_api, "_google_claims", AsyncMock(return_value=bad))
+        assert client.post("/auth/google", json={"credential": "tok"}).status_code == 401
+
+
+def test_google_login_is_off_without_a_client_id(client, monkeypatch):
+    monkeypatch.setattr(settings(), "google_client_id", "")
+    assert client.post("/auth/google", json={"credential": "tok"}).status_code == 404
+    assert client.get("/auth/config").json() == {"google_client_id": ""}
+
+
+def test_google_claims_rejects_a_token_google_refuses():
+    transport = httpx.MockTransport(lambda req: httpx.Response(400, json={"error": "invalid_token"}))
+    assert asyncio.run(auth_api._google_claims("tok", transport)) is None
+    ok = httpx.MockTransport(lambda req: httpx.Response(200, json=_claims()))
+    assert asyncio.run(auth_api._google_claims("tok", ok))["email"] == "g@example.com"

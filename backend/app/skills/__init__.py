@@ -1,7 +1,8 @@
 """Skill interface and registry.
 
 To add a skill: create app/skills/<name>.py (or a package) exposing a module-level
-`skill` object that satisfies `Skill`. The agent core never changes.
+`skill` object that satisfies `Skill`, or a `skills` list for a family of tools.
+The agent core never changes.
 """
 
 import importlib
@@ -50,8 +51,9 @@ class Skill(Protocol):
 def discover() -> dict[str, Skill]:
     found: dict[str, Skill] = {}
     for module in pkgutil.iter_modules(__path__):
-        skill = getattr(importlib.import_module(f"{__name__}.{module.name}"), "skill", None)
-        if skill is not None:
+        loaded = importlib.import_module(f"{__name__}.{module.name}")
+        single = getattr(loaded, "skill", None)
+        for skill in [single] if single is not None else getattr(loaded, "skills", []):
             found[skill.name] = skill
     return found
 

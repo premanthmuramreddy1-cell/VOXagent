@@ -1,0 +1,18 @@
+{
+  "packageId": "app.voxagent.twa",
+  "host": "voxagent.example.com",
+  "name": "VoxAgent",
+  "launcherName": "VoxAgent",
+  "display": "standalone",
+  "themeColor": "#0a0c10",
+  "navigationColor": "#0a0c10",
+  "backgroundColor": "#0a0c10",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://voxagent.example.com/icon.svg",
+  "webManifestUrl": "https://voxagent.example.com/manifest.webmanifest",
+  "appVersionName": "0.1.0",
+  "appVersionCode": 1,
+  "signingKey": { "path": "./android.keystore", "alias": "voxagent" },
+  "generatorApp": "bubblewrap-cli"
+}

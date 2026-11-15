@@ -29,7 +29,72 @@ import {
 
 type Step = { text: string; skill: string; done: boolean }
 type Tool = { skill: string; state: 'running' | 'ok' | 'failed'; data?: any; error?: string }
-type Item = { role: 'user' | 'assistant'; text: string; restate?: string; steps?: Step[]; tools?: Tool[]; live?: boolean }
+type Extra =
+  | { kind: 'diff'; changes: { path: string; kind: string; diff: string }[] }
+  | { kind: 'terminal'; text: string }
+  | { kind: 'server'; url: string; command: string }
+  | { kind: 'email'; to: string[]; subject: string; body: string }
+  | { kind: 'form'; url: string; screenshot: string; filled: { field: string }[]; missing: string[] }
+type Item = {
+  role: 'user' | 'assistant'; text: string; restate?: string; steps?: Step[]; tools?: Tool[]; live?: boolean; extras?: Extra[]
+}
+
+const diffClass = (line: string) =>
+  line.startsWith('+') && !line.startsWith('+++') ? 'diff-add' : line.startsWith('-') && !line.startsWith('---') ? 'diff-del' : 'text-muted'
+
+/** What the agent produced besides speech: staged diffs, terminal output, previews, drafts, filled forms. */
+function Extras({ extras }: { extras: Extra[] }) {
+  return (
+    <>
+      {extras.map((extra, i) => {
+        if (extra.kind === 'terminal') {
+          return (
+            <pre key={i} className="code-layer max-h-64 overflow-auto rounded-xl border border-line bg-surface text-[12px] text-ink">
+              {extra.text.slice(-6000)}
+            </pre>
+          )
+        }
+        if (extra.kind === 'diff') {
+          return (
+            <div key={i} className="rounded-xl border border-line bg-surface/60 p-3 font-mono text-xs">
+              <p className="mb-2 text-muted">Staged for review: {extra.changes.map((c) => c.path).join(', ')}</p>
+              <pre className="code-layer max-h-56 overflow-auto p-0 text-[12px]">
+                {extra.changes.flatMap((c) => c.diff.split('\n')).slice(0, 120).map((line, n) => (
+                  <div key={n} className={diffClass(line)}>{line || ' '}</div>
+                ))}
+              </pre>
+              <a href="#/workspace" className="mt-2 inline-block text-accent hover:underline">Review each change in the workspace →</a>
+            </div>
+          )
+        }
+        if (extra.kind === 'server') {
+          return (
+            <a key={i} href={extra.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-xl border border-ok/40 bg-ok-subtle px-3 py-2 font-mono text-xs text-ok">
+              <ExternalLink className="h-3.5 w-3.5" /> Preview running: {extra.url}
+            </a>
+          )
+        }
+        if (extra.kind === 'email') {
+          return (
+            <div key={i} className="rounded-xl border border-line bg-surface/60 p-3 text-sm">
+              <p className="font-mono text-xs text-muted">To {extra.to.join(', ')}</p>
+              <p className="font-semibold">{extra.subject}</p>
+              <p className="mt-1 whitespace-pre-wrap text-ink">{extra.body}</p>
+            </div>
+          )
+        }
+        return (
+          <figure key={i} className="overflow-hidden rounded-xl border border-line">
+            <img src={`data:image/png;base64,${extra.screenshot}`} alt={`Filled form at ${extra.url}`} className="max-h-96 w-full object-cover object-top" />
+            <figcaption className="px-3 py-2 font-mono text-xs text-muted">
+              Filled {extra.filled.length} field(s){extra.missing.length ? ` · not filled: ${extra.missing.slice(0, 5).join(', ')}` : ''} · paused before submit
+            </figcaption>
+          </figure>
+        )
+      })}
+    </>
+  )
+}
 type Session = { id: string; title: string }
 type Confirm = { id: string; skill: string; permission: string }
 
@@ -70,6 +135,24 @@ function apply(items: Item[], event: ServerEvent): Item[] {
       const item = draft()
       const state = event.ok ? 'ok' : 'failed'
       item.tools = item.tools?.map((t) => (t.skill === event.skill ? { ...t, state, data: event.data, error: event.error } : t))
+      break
+    }
+    case 'changes.proposed':
+    case 'server.started':
+    case 'email.draft':
+    case 'form.preview':
+    case 'terminal.output': {
+      const item = draft()
+      const extras = [...(item.extras ?? [])]
+      const tail = extras[extras.length - 1]
+      if (event.type === 'terminal.output') {
+        if (tail?.kind === 'terminal') extras[extras.length - 1] = { kind: 'terminal', text: tail.text + event.text }
+        else extras.push({ kind: 'terminal', text: event.text })
+      } else if (event.type === 'changes.proposed') extras.push({ kind: 'diff', changes: event.changes })
+      else if (event.type === 'server.started') extras.push({ kind: 'server', url: event.url, command: event.command })
+      else if (event.type === 'email.draft') extras.push({ kind: 'email', to: event.to, subject: event.subject, body: event.body })
+      else extras.push({ kind: 'form', url: event.url, screenshot: event.screenshot, filled: event.filled, missing: event.missing })
+      item.extras = extras
       break
     }
     case 'answer.delta':
@@ -140,6 +223,8 @@ function Bubble({ item }: { item: Item }) {
             <span className="text-muted">{item.restate}</span>
           </div>
         )}
+
+        {item.extras && item.extras.length > 0 && <Extras extras={item.extras} />}
 
         {/* Plan Steps */}
         {item.steps && item.steps.length > 0 && (
@@ -238,7 +323,10 @@ function Bubble({ item }: { item: Item }) {
                       target="_blank"
                       rel="noopener noreferrer"
                     >
-                      <span>Open Checkout (${item.tools.find((t) => t.data?.checkout_url)?.data.total_estimated_cost})</span>
+                      <span>
+                        Open product search ({item.tools.find((t) => t.data?.checkout_url)?.data.currency ?? 'USD'}{' '}
+                        {item.tools.find((t) => t.data?.checkout_url)?.data.total_estimated_cost} est.)
+                      </span>
                       <ExternalLink className="h-3.5 w-3.5" />
                     </a>
                     {item.tools.find((t) => t.data?.opened_in_browser)?.data.opened_in_browser && (
@@ -399,6 +487,17 @@ export default function Chat() {
     if (!online) return setError({ message: 'You are currently offline. Please wait for reconnection.' })
     ;(await openMic())?.start()
   }
+
+  // The desktop app's global push-to-talk shortcut toggles recording through this event.
+  const talkRef = useRef(talk)
+  useEffect(() => {
+    talkRef.current = talk
+  })
+  useEffect(() => {
+    const toggle = () => talkRef.current(!mic.current?.recording)
+    window.addEventListener('vox:talk', toggle)
+    return () => window.removeEventListener('vox:talk', toggle)
+  }, [])
 
   async function toggleHandsFree() {
     const on = !handsFree

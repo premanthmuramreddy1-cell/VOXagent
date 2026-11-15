@@ -3,17 +3,25 @@ import shutil
 from datetime import timedelta
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db import Activity, Base, ChatSession, Message, RefreshToken, Review, Upload, UsageEvent, User, get_db, now
+from app.crypto import load_secret
+from app.db import (Activity, Base, BotLink, ChatSession, LinkCode, Memory, Message, Note, PendingChange,
+                    PushSubscription, RefreshToken, Reminder, Review, Secret, Upload, UsageEvent, User,
+                    UserSetting, Workspace, get_db, now)
 from app.security import current_user, hash_password, make_access_token, rate_limit, sha256, verify_password
 
 router = APIRouter()
 COOKIE = "vox_refresh"
+SUPPORTED_LANGUAGES = {"", "en", "hi", "te", "ta"}
+GOOGLE_TOKENINFO = "https://oauth2.googleapis.com/tokeninfo"
+GOOGLE_ISSUERS = {"accounts.google.com", "https://accounts.google.com"}
 
 
 class Credentials(BaseModel):
@@ -49,39 +57,95 @@ def signup(body: Credentials, response: Response, db: Session = Depends(get_db))
     email = body.email.lower()
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(409, "email already registered")
+    admins = {e.lower() for e in settings().admin_emails}
     user = User(
-        email=email, password_hash=hash_password(body.password), name=body.name,
-        is_admin=email in settings().admin_emails,
+        email=email, password_hash=hash_password(body.password), name=body.name.strip(),
+        is_admin=email in admins,
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "email already registered") from None
     return _issue(user, db, response)
 
 
 @router.post("/auth/login", dependencies=[Depends(rate_limit)])
 def login(body: Credentials, response: Response, db: Session = Depends(get_db)) -> dict:
     user = db.scalar(select(User).where(User.email == body.email.lower()))
-    if not user or not verify_password(body.password, user.password_hash):
+    if not user or not user.password_hash or not verify_password(body.password, user.password_hash):
         raise HTTPException(401, "wrong email or password")
+    return _issue(user, db, response)
+
+
+class GoogleCredential(BaseModel):
+    credential: str = Field(min_length=1, max_length=4096)
+
+
+async def _google_claims(credential: str, transport: httpx.AsyncBaseTransport | None = None) -> dict | None:
+    # shortcut: Google's tokeninfo endpoint checks signature and expiry so we need no crypto dependency;
+    # switch to local JWKS verification if sign-ins exceed a few per second.
+    async with httpx.AsyncClient(transport=transport, timeout=10) as http:
+        r = await http.get(GOOGLE_TOKENINFO, params={"id_token": credential})
+    return r.json() if r.status_code == 200 else None
+
+
+@router.get("/auth/config")
+def auth_config() -> dict:
+    return {"google_client_id": settings().google_client_id}
+
+
+@router.post("/auth/google", dependencies=[Depends(rate_limit)])
+async def google_login(body: GoogleCredential, response: Response, db: Session = Depends(get_db)) -> dict:
+    client_id = settings().google_client_id
+    if not client_id:
+        raise HTTPException(404, "Google sign-in is not configured")
+    try:
+        claims = await _google_claims(body.credential)
+    except httpx.HTTPError:
+        raise HTTPException(503, "could not reach Google, try again") from None
+    if (
+        not claims or claims.get("aud") != client_id or claims.get("iss") not in GOOGLE_ISSUERS
+        or str(claims.get("email_verified")).lower() != "true" or not claims.get("email")
+    ):
+        raise HTTPException(401, "Google sign-in failed")
+    email = str(claims["email"]).lower()
+    user = db.scalar(select(User).where(User.email == email))
+    if not user:
+        admins = {e.lower() for e in settings().admin_emails}
+        user = User(email=email, password_hash="", name=str(claims.get("name", ""))[:100], is_admin=email in admins)
+        db.add(user)
+        try:
+            db.commit()
+        except IntegrityError:  # two first sign-ins raced; use the row that won
+            db.rollback()
+            user = db.scalar(select(User).where(User.email == email))
+            if not user:
+                raise HTTPException(409, "try again") from None
     return _issue(user, db, response)
 
 
 @router.post("/auth/refresh")
 def refresh(response: Response, vox_refresh: str = Cookie(""), db: Session = Depends(get_db)) -> dict:
+    if not vox_refresh:
+        raise HTTPException(401, "session expired, log in again")
     row = db.get(RefreshToken, sha256(vox_refresh))
     if not row or row.expires_at < now():
         raise HTTPException(401, "session expired, log in again")
     user = db.get(User, row.user_id)
     db.delete(row)  # rotate: each refresh token works once
     if not user:
+        db.commit()
         raise HTTPException(401, "unknown user")
     return _issue(user, db, response)
 
 
 @router.post("/auth/logout")
 def logout(response: Response, vox_refresh: str = Cookie(""), db: Session = Depends(get_db)) -> dict:
-    db.execute(delete(RefreshToken).where(RefreshToken.token_hash == sha256(vox_refresh)))
-    db.commit()
+    if vox_refresh:
+        db.execute(delete(RefreshToken).where(RefreshToken.token_hash == sha256(vox_refresh)))
+        db.commit()
     response.delete_cookie(COOKIE, path="/auth")
     return {"ok": True}
 
@@ -93,7 +157,15 @@ def me(user: User = Depends(current_user)) -> dict:
 
 @router.patch("/me")
 def update_me(body: ProfilePatch, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
-    for key, value in body.model_dump(exclude_none=True).items():
+    updates = body.model_dump(exclude_none=True)
+    if "name" in updates:
+        updates["name"] = updates["name"].strip()
+    if "preferred_language" in updates:
+        lang = updates["preferred_language"].strip().lower()[:2]
+        if lang not in SUPPORTED_LANGUAGES:
+            raise HTTPException(422, "unsupported preferred_language")
+        updates["preferred_language"] = lang
+    for key, value in updates.items():
         setattr(user, key, value)
     db.merge(user)
     db.commit()
@@ -115,6 +187,12 @@ def export_me(user: User = Depends(current_user), db: Session = Depends(get_db))
         "reviews": _rows(db, Review, Review.user_id == user.id),
         "activity": _rows(db, Activity, Activity.user_id == user.id),
         "usage": _rows(db, UsageEvent, UsageEvent.user_id == user.id),
+        "memories": _rows(db, Memory, Memory.user_id == user.id),
+        "notes": _rows(db, Note, Note.user_id == user.id),
+        "reminders": _rows(db, Reminder, Reminder.user_id == user.id),
+        "workspaces": _rows(db, Workspace, Workspace.user_id == user.id),
+        "form_profile": load_secret(db, user.id, "profile") or {},
+        "connected": sorted(s.kind for s in db.scalars(select(Secret).where(Secret.user_id == user.id))),
     }
 
 
@@ -122,9 +200,13 @@ def export_me(user: User = Depends(current_user), db: Session = Depends(get_db))
 def delete_me(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
     session_ids = select(ChatSession.id).where(ChatSession.user_id == user.id)
     db.execute(delete(Message).where(Message.session_id.in_(session_ids)))
-    for model in (ChatSession, RefreshToken, Activity, Upload, Review, UsageEvent):
+    space_ids = select(Workspace.id).where(Workspace.user_id == user.id)
+    db.execute(delete(PendingChange).where(PendingChange.workspace_id.in_(space_ids)))
+    for model in (ChatSession, RefreshToken, Activity, Upload, Review, UsageEvent, Workspace, Memory, Note, Reminder,
+                  Secret, PushSubscription, BotLink, LinkCode, UserSetting):
         db.execute(delete(model).where(model.user_id == user.id))
     db.execute(delete(User).where(User.id == user.id))
     db.commit()
-    shutil.rmtree(Path(settings().data_dir) / "uploads" / user.id, ignore_errors=True)
+    for folder in ("uploads", "workspaces"):
+        shutil.rmtree(Path(settings().data_dir) / folder / user.id, ignore_errors=True)
     return {"ok": True}
