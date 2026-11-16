@@ -10,8 +10,10 @@ from app.skills import Permission, RunContext, SkillResult
 
 
 class Args(BaseModel):
-    focus: Literal["all", "news", "markets"] = Field("all", description="'markets' for 'how is the stock market "
-                                                                        "doing', 'news' for headlines only.")
+    focus: Literal["all", "news", "markets"] = Field("all", description="'all' for general questions like 'what's "
+                                                                        "going on in the world'; 'markets' only for "
+                                                                        "market questions; 'news' only when the user "
+                                                                        "asked for headlines alone.")
     topic: str = Field("", description="A news topic when the user asked about one ('AI', 'cricket'); else empty.")
 
 

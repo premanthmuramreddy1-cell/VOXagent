@@ -6,6 +6,8 @@ import WorkspaceView from './Workspace'
 import Assistant from './Assistant'
 import Integrations from './Integrations'
 import Chat from './Chat'
+import Swarm from './Swarm'
+import type { Formation } from './swarmEngine'
 import Reviews, { SharedReview } from './Review'
 import {
   MessageSquare,
@@ -47,20 +49,24 @@ function useHash() {
   return hash.replace(/^#\/?/, '').split('/')
 }
 
+// The mark is itself a tiny swarm: bots on a disc, densest at the core like the brain they form on the Talk page.
+const MARK = Array.from({ length: 34 }, (_, i) => {
+  const r = Math.sqrt((i + 0.5) / 34) * 12
+  const a = i * 2.399963
+  return { x: 16 + r * Math.cos(a), y: 16 + r * Math.sin(a) * 0.86, s: 1.5 - (r / 12) * 0.7 }
+})
+
+const FORMATION: Record<string, Formation> = { '': 'brain', workspace: 'lattice', me: 'helix', reviews: 'ring', account: 'ring', admin: 'ring' }
+
 function Logo({ className = '', compact = false }: { className?: string; compact?: boolean }) {
   return (
     <div className={`flex items-center gap-2.5 select-none ${className}`}>
-      <div className="relative flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-accent/90 to-accent text-surface shadow-xs">
-        <div className="flex items-center gap-0.5">
-          <span className="h-2 w-0.5 rounded-full bg-surface"></span>
-          <span className="h-4 w-0.5 rounded-full bg-surface"></span>
-          <span className="h-5 w-0.5 rounded-full bg-surface"></span>
-          <span className="h-3 w-0.5 rounded-full bg-surface"></span>
-        </div>
-      </div>
+      <svg viewBox="0 0 32 32" className="h-8 w-8 text-accent" aria-hidden="true">
+        {MARK.map((d, i) => <circle key={i} cx={d.x} cy={d.y} r={d.s} fill="currentColor" opacity={0.45 + d.s / 3} />)}
+      </svg>
       <div className={compact ? 'hidden flex-col sm:flex' : 'flex flex-col'}>
         <span className="font-mono text-xs font-bold tracking-tight text-ink">VOXAGENT</span>
-        <span className="font-mono text-[9px] uppercase tracking-widest text-muted">Voice Terminal</span>
+        <span className="font-mono text-[9px] uppercase tracking-widest text-muted">Nanoswarm agent</span>
       </div>
     </div>
   )
@@ -86,9 +92,7 @@ function Login({ onUser }: { onUser: (user: User) => void }) {
   }
 
   return (
-    <main className="relative flex min-h-full items-center justify-center overflow-hidden px-4 py-12">
-      {/* Subtle ambient background glow */}
-      <div className="pointer-events-none absolute -top-24 left-1/2 -z-10 h-96 w-96 -translate-x-1/2 rounded-full bg-accent/10 blur-3xl" />
+    <main className="relative z-10 flex min-h-full items-center justify-center overflow-hidden px-4 py-12">
 
       <div className="w-full max-w-md space-y-6">
         <div className="text-center">
@@ -100,7 +104,7 @@ function Login({ onUser }: { onUser: (user: User) => void }) {
           </p>
         </div>
 
-        <div className="panel p-6 shadow-md backdrop-blur-sm sm:p-8">
+        <div className="panel p-6 sm:p-8">
           {/* Mode Switcher */}
           <div className="mb-6 flex rounded-xl border border-line bg-surface p-1">
             <button
@@ -547,7 +551,14 @@ export default function App() {
       </div>
     )
   }
-  if (!user) return <Login onUser={setUser} />
+  if (!user) {
+    return (
+      <>
+        <Swarm formation="brain" dark={dark} />
+        <Login onUser={setUser} />
+      </>
+    )
+  }
 
   const links = [
     ['', 'Talk', MessageSquare],
@@ -559,9 +570,11 @@ export default function App() {
   ] as const
 
   return (
-    <div className="flex h-full flex-col bg-surface text-ink overflow-hidden">
+    <>
+    <Swarm formation={FORMATION[page] ?? 'brain'} dark={dark} />
+    <div className="relative z-10 flex h-full flex-col overflow-hidden text-ink">
       {/* Top Navigation Bar */}
-      <header className="no-print sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-line bg-surface/85 px-4 sm:px-6 backdrop-blur-md">
+      <header className="no-print sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-line bg-surface px-4 sm:px-6 glass">
         <div className="flex min-w-0 items-center gap-3 md:gap-6">
           <Logo compact />
           <nav className="flex min-w-0 items-center gap-1 overflow-x-auto" aria-label="Main navigation">
@@ -631,5 +644,6 @@ export default function App() {
         )}
       </div>
     </div>
+    </>
   )
 }

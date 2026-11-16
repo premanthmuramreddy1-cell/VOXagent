@@ -50,6 +50,18 @@ def test_admin_flag_comes_from_config(client):
     assert signup(client)[1]["user"]["is_admin"] is False
 
 
+def test_admin_email_cannot_be_claimed_by_a_remote_password_sign_up(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.config import settings
+    from app.main import app
+
+    monkeypatch.setattr(settings(), "admin_emails", ["owner@example.com"])
+    stranger = TestClient(app, client=("203.0.113.9", 40000))  # someone reaching a public link
+    r = stranger.post("/auth/signup", json={"email": "Owner@example.com", "password": "password123", "name": "X"})
+    assert r.status_code == 200 and r.json()["user"]["is_admin"] is False
+
+
 def test_export_then_delete_removes_account(client):
     headers, _ = signup(client, "gone@example.com")
     client.patch("/me", headers=headers, json={"preferred_language": "te"})

@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -10,6 +11,8 @@ from pydantic import BaseModel, Field
 from app.skills import Permission, RunContext, SkillResult
 
 SAFE_APP_NAME = re.compile(r"^[A-Za-z0-9 _\-.]+$")
+# macOS media keys: 16 play/pause, 17 next, 18 previous.
+MEDIA_KEYS = {"playpause": 16, "next track": 17, "previous track": 18}
 
 ActionType = Literal[
     "volume",
@@ -42,72 +45,92 @@ async def _run_cmd(*cmd: str) -> tuple[int, str, str]:
     return proc.returncode or 0, stdout.decode().strip(), stderr.decode().strip()
 
 
+async def _run_checked(action_label: str, *cmd: str) -> str:
+    """Run a system binary and raise a ValueError if it exits non-zero."""
+    code, out, err = await _run_cmd(*cmd)
+    if code != 0:
+        detail = err or out or f"exit code {code}"
+        raise ValueError(f"could not {action_label}: {detail}")
+    return out
+
+
 async def handle_volume(val: str) -> tuple[str, dict[str, Any]]:
     clean = val.strip().lower()
     if clean == "mute":
-        await _run_cmd("osascript", "-e", "set volume output muted true")
+        await _run_checked("mute audio", "osascript", "-e", "set volume output muted true")
         return "Audio muted.", {"muted": True}
     if clean == "unmute":
-        await _run_cmd("osascript", "-e", "set volume output muted false")
+        await _run_checked("unmute audio", "osascript", "-e", "set volume output muted false")
         return "Audio unmuted.", {"muted": False}
     if not clean:
-        _, out, _ = await _run_cmd("osascript", "-e", "output volume of (get volume settings)")
+        out = await _run_checked("get volume settings", "osascript", "-e", "output volume of (get volume settings)")
         return f"Current output volume is {out}%.", {"volume": out}
 
     m = re.search(r"\d+", clean)
     if not m:
         raise ValueError("specify volume between 0 and 100, or 'mute'/'unmute'")
     level = max(0, min(100, int(m.group(0))))
-    await _run_cmd("osascript", "-e", f"set volume output volume {level}")
+    await _run_checked(f"set volume to {level}%", "osascript", "-e", f"set volume output volume {level}")
     return f"Output volume set to {level}%.", {"volume": level}
 
 
 async def handle_media(cmd: str) -> tuple[str, dict[str, Any]]:
     clean = cmd.strip().lower()
-    script = ""
     if clean in ("play", "pause", "playpause", "toggle"):
-        script = 'tell application "System Events" to key code 16 using {}'  # Play/Pause media key fallback
+        apple_cmd = "playpause"
         summary = "Toggled media playback."
     elif clean in ("next", "skip"):
+        apple_cmd = "next track"
         summary = "Skipped to next media track."
-        script = 'tell application "System Events" to key code 19 using {}'
     elif clean in ("prev", "previous", "back"):
+        apple_cmd = "previous track"
         summary = "Returned to previous media track."
-        script = 'tell application "System Events" to key code 20 using {}'
     else:
         raise ValueError("media command must be one of: play, pause, next, previous")
 
-    await _run_cmd("osascript", "-e", script)
-    return summary, {"command": clean}
+    script = f"""
+    tell application "System Events"
+        set runningApps to name of every process
+    end tell
+    if runningApps contains "Spotify" then
+        tell application "Spotify" to {apple_cmd}
+        return "Spotify"
+    else if runningApps contains "Music" then
+        tell application "Music" to {apple_cmd}
+        return "Music"
+    else
+        tell application "System Events" to key code {MEDIA_KEYS[apple_cmd]}
+        return "system media key"
+    end if
+    """
+    player = await _run_checked("control media playback", "osascript", "-e", script.strip())
+    return summary, {"command": clean, "player": player}
 
 
 async def handle_app_open(app_name: str) -> tuple[str, dict[str, Any]]:
     name = app_name.strip()
-    if not name or not SAFE_APP_NAME.match(name):
+    if not name or name.startswith("-") or not SAFE_APP_NAME.match(name):
         raise ValueError("invalid application name")
-    code, _, err = await _run_cmd("open", "-a", name)
-    if code != 0:
-        raise ValueError(f"could not open application '{name}': {err or 'app not found'}")
+    await _run_checked(f"open application '{name}'", "open", "-a", name)
     return f"Opened application {name}.", {"app": name}
 
 
 async def handle_app_quit(app_name: str) -> tuple[str, dict[str, Any]]:
     name = app_name.strip()
-    if not name or not SAFE_APP_NAME.match(name):
+    if not name or name.startswith("-") or not SAFE_APP_NAME.match(name):
         raise ValueError("invalid application name")
-    # Escape quotes for AppleScript string literal
-    safe_name = name.replace('"', '\\"')
+    safe_name = name.replace("\\", "\\\\").replace('"', '\\"')
     script = f'tell application "{safe_name}" to quit'
-    await _run_cmd("osascript", "-e", script)
+    await _run_checked(f"quit application '{name}'", "osascript", "-e", script)
     return f"Closed application {name}.", {"app": name}
 
 
 async def handle_open_url(url: str) -> tuple[str, dict[str, Any]]:
     clean = url.strip()
     parsed = urlparse(clean)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError("only http and https URLs can be opened")
-    await _run_cmd("open", clean)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("only valid http and https URLs can be opened")
+    await _run_checked(f"open URL '{clean}'", "open", "--", clean)
     return f"Opened {clean} in default browser.", {"url": clean}
 
 
@@ -123,14 +146,24 @@ async def handle_battery() -> tuple[str, dict[str, Any]]:
 
 
 async def handle_lock() -> tuple[str, dict[str, Any]]:
-    await _run_cmd("pmset", "displaysleepnow")
+    lock_script = 'tell application "System Events" to keystroke "q" using {control down, command down}'
+    code, _, _ = await _run_cmd("osascript", "-e", lock_script)
+    if code != 0:
+        await _run_checked("lock screen", "pmset", "displaysleepnow")
     return "Screen locked.", {"locked": True}
 
 
 async def handle_folder(path: str) -> tuple[str, dict[str, Any]]:
-    clean = path.strip() or "~"
-    await _run_cmd("open", clean)
-    return f"Opened folder {clean} in Finder.", {"path": clean}
+    raw = path.strip() or "~"
+    if raw.startswith("-"):
+        raise ValueError("invalid folder path")
+    target = Path(raw).expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        raise ValueError(f"folder does not exist or is not a directory: {raw}")
+    if target.suffix.lower() in (".app", ".pkg", ".command", ".sh"):
+        raise ValueError("cannot open application bundles or scripts as folders")
+    await _run_checked(f"open folder '{target}'", "open", "--", str(target))
+    return f"Opened folder {target} in Finder.", {"path": str(target)}
 
 
 class SystemControl:

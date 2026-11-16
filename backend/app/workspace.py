@@ -47,6 +47,9 @@ def safe_path(base: Path, rel: str) -> Path:
     rel = rel.strip().replace("\\", "/").lstrip("/")
     if not rel or "\0" in rel:
         raise WorkspaceError("a file path is required")
+    # The OS refuses longer names with an OSError, which would surface as a server error instead of an answer.
+    if len(rel.encode()) > 1024 or any(len(part.encode()) > 255 for part in rel.split("/")):
+        raise WorkspaceError("that file path is too long")
     path = (base / rel).resolve()
     if not path.is_relative_to(base) or path == base:
         raise WorkspaceError(f"{rel} is outside the workspace")

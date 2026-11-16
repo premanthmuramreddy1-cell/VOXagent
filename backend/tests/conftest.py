@@ -19,7 +19,7 @@ _n = 0
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))  # the owner, on the machine VoxAgent runs on
 
 
 def signup(client, email=None):

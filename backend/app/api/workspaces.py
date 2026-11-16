@@ -289,6 +289,14 @@ async def server_logs(ws_id: str, server_id: str, user: User = Depends(current_u
 preview = APIRouter()
 HOP_HEADERS = {"connection", "keep-alive", "transfer-encoding", "te", "upgrade", "content-encoding",
                "content-length", "host"}
+# Previews are served on VoxAgent's own origin. Without this, a preview's scripts could call /auth/refresh with the
+# viewer's session cookie and take over their account; the sandbox gives the page an origin of its own.
+PREVIEW_SANDBOX = "sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+
+
+def hidden(path: str) -> bool:
+    """.git, .venv, .env, .vox: a preview link is shareable, and a plain file server would hand these out."""
+    return any(part.startswith(".") for part in path.split("/"))
 
 
 @preview.api_route("/preview/{server_id}/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"])
@@ -297,6 +305,8 @@ async def preview_proxy(server_id: str, path: str, request: Request) -> Response
     server = sandbox.SERVERS.get(server_id)
     if not server or not server.running:
         raise HTTPException(404, "this preview has stopped")
+    if hidden(path):
+        raise HTTPException(404, "not found")
     server.last_access = time.monotonic()
     headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_HEADERS | {"cookie", "authorization"}}
     url = f"http://{server.host}:{server.port}/{path}"
@@ -306,7 +316,8 @@ async def preview_proxy(server_id: str, path: str, request: Request) -> Response
                                           content=await request.body())
     except httpx.HTTPError:
         raise HTTPException(502, "the app is not answering yet; check its logs") from None
-    out = {k: v for k, v in upstream.headers.items() if k.lower() not in HOP_HEADERS | {"set-cookie"}}
+    out = {k.lower(): v for k, v in upstream.headers.items() if k.lower() not in HOP_HEADERS | {"set-cookie"}}
+    out["content-security-policy"] = ", ".join(filter(None, [out.get("content-security-policy"), PREVIEW_SANDBOX]))
     return Response(upstream.content, upstream.status_code, out)
 
 
@@ -314,7 +325,7 @@ async def preview_proxy(server_id: str, path: str, request: Request) -> Response
 async def preview_socket(websocket: WebSocket, server_id: str, path: str) -> None:
     """Live-reload and app sockets: pipe frames both ways between the browser and the sandboxed app."""
     server = sandbox.SERVERS.get(server_id)
-    if not server or not server.running:
+    if not server or not server.running or hidden(path):
         await websocket.close(4404)
         return
     await websocket.accept()

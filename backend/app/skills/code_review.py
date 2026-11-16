@@ -103,7 +103,7 @@ def _unzip(blob: bytes) -> dict[str, str]:
 def _from_blob(name: str, blob: bytes) -> dict[str, str]:
     if name.lower().endswith(".zip"):
         return _unzip(blob)
-    return {name: blob.decode("utf-8", "replace")}
+    return {_safe(name): blob.decode("utf-8", "replace")}
 
 
 def _from_upload(user_id: str, upload_id: str) -> dict[str, str]:
@@ -161,7 +161,7 @@ async def gather(args: Args, ctx: RunContext) -> tuple[str, dict[str, str]]:
     code = _pasted(ctx.user_text) or (args.code if _squash(args.code) in _squash(ctx.user_text) else "")
     if not code.strip():
         raise ValueError("no code to review: paste code, attach a file or zip, or give a GitHub URL")
-    return "pasted code", {PurePosixPath(args.filename).name or "snippet.py": code}
+    return "pasted code", {_safe(PurePosixPath(args.filename).name or "snippet.py"): code}
 
 
 # ---- static analysis ----------------------------------------------------------
@@ -203,9 +203,12 @@ async def _ruff(root: Path) -> list[dict]:
     # --isolated: never load config files from the code being reviewed
     out = await _exec(root, sys.executable, "-m", "ruff", "check", ".", "--isolated", "--output-format", "json",
                       "--select", "F,E9,B,S,PERF,N,BLE,E722", "--no-cache")
+    if "[" not in out:
+        return []
     items = json.loads(out[out.index("["):])
+    resolved_root = root.resolve()
     for item in items:
-        item["filename"] = str(Path(item["filename"]).relative_to(root.resolve()))
+        item["filename"] = str(Path(item["filename"]).resolve().relative_to(resolved_root))
     return [_ruff_issue(item) for item in items]
 
 
@@ -307,10 +310,23 @@ async def llm_issues(files: dict[str, str], ctx: RunContext, not_run: list[str],
     return issues
 
 
-def merge(static: list[dict], llm: list[dict]) -> list[dict]:
+def _attach_code_lines(issues: list[dict], files: dict[str, str]) -> list[dict]:
+    """Populate `code` with the offending source line when available."""
+    split_cache = {name: text.splitlines() for name, text in files.items()}
+    for issue in issues:
+        lines = split_cache.get(issue["file"])
+        idx = issue.get("line", 0) - 1
+        if lines and 0 <= idx < len(lines) and not issue.get("code"):
+            issue["code"] = lines[idx].strip()[:200]
+    return issues
+
+
+def merge(static: list[dict], llm: list[dict], files: dict[str, str] | None = None) -> list[dict]:
     """Static findings win when the LLM flags the same line."""
     taken = {(i["file"], i["line"]) for i in static}
     merged = static + [i for i in llm if (i["file"], i["line"]) not in taken]
+    if files:
+        _attach_code_lines(merged, files)
     return sorted(merged, key=lambda i: (list(WEIGHT).index(i["severity"]), i["file"], i["line"]))
 
 
@@ -330,7 +346,8 @@ def to_markdown(review: Review) -> str:
                 f"- **Suggested fix:** {issue['fix']}", f"- **Found by:** {issue['source']}", ""]
     if not review.issues:
         out += ["No issues found.", ""]
-    out += ["## Checks that did not run", "", *[f"- {item}" for item in review.not_run]]
+    if review.not_run:
+        out += ["## Checks that did not run", "", *[f"- {item}" for item in review.not_run]]
     return "\n".join(out)
 
 
@@ -359,7 +376,7 @@ class CodeReview:
         except ProviderError:  # static findings are still worth returning
             deep = []
             not_run.append("LLM review (the language model is unavailable)")
-        issues = merge(static, deep)
+        issues = merge(static, deep, files)
         total, breakdown = score(issues)
         with SessionLocal() as db:
             review = Review(user_id=ctx.user_id, source=source, score=total, breakdown=breakdown,

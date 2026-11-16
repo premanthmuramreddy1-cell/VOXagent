@@ -38,6 +38,9 @@ def test_paths_cannot_escape_the_workspace(ws):
         with pytest.raises(WorkspaceError):
             wsp.safe_path(base, bad)
     assert wsp.safe_path(base, "/src/app.py") == base / "src" / "app.py"
+    for too_long in ["x" * 600, "a/" * 600 + "b", "日" * 100]:  # one 600-char name, a 1201-char path, 300 bytes
+        with pytest.raises(wsp.WorkspaceError, match="too long"):
+            wsp.safe_path(base, too_long)
 
 
 def test_write_is_staged_until_applied_then_undone(ws):

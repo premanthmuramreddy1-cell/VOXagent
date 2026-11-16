@@ -85,6 +85,8 @@ def _seatbelt_profile(work: Path) -> str:
         '(deny file-write* (subpath "/"))'
         f"{deny_reads}"
         f'(allow file-read* file-write* (subpath "{work}"))'
+        # realpath() stats every parent folder; metadata only, so their contents stay unreadable
+        + "".join(f'(allow file-read-metadata (literal "{p}"))' for p in work.parents) +
         '(allow file-write* (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/fd/"))'
         '(deny network-outbound (remote ip "localhost:*"))'
     )

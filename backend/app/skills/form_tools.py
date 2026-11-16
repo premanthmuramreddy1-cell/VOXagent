@@ -26,9 +26,8 @@ class FillForm:
         await ctx.emit("form.preview", url=result["url"], filled=result["filled"], missing=result["missing"],
                        screenshot=result["screenshot"])
         missing = f" I could not fill: {', '.join(result['missing'][:6])}." if result["missing"] else ""
-        return SkillResult(f"I filled {len(result['filled'])} field(s) and paused before submitting.{missing} "
-                           "Check the preview, then say submit it.",
-                           {"filled": result["filled"], "missing": result["missing"]})
+        return SkillResult(f"I filled {len(result['filled'])} field(s).{missing}",
+                           {"filled": result["filled"], "missing": result["missing"]}, then="submit_form")
 
 
 class Empty(BaseModel):

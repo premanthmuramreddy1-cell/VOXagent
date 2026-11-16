@@ -84,7 +84,9 @@ function Terminal({ ws, onFiles }: { ws: string; onFiles: () => void }) {
   const loadServers = useCallback(() => {
     api<Server[]>(`/workspaces/${ws}/servers`).then(setServers).catch(() => setServers([]))
   }, [ws])
-  useEffect(loadServers, [loadServers])
+  useEffect(() => {
+    loadServers()
+  }, [loadServers])
   useEffect(() => {
     box.current?.scrollTo(0, box.current.scrollHeight)
   }, [output])

@@ -144,7 +144,7 @@ def test_usage_admin_and_metrics(client, auth, fake):
     assert overview["usage"]["review"]["count"] >= 1 and overview["users"]
     record("stt", "u1", latency_ms=120)
     assert client.get("/metrics", headers=admin).json()["stt"] == {"count": 1, "p50": 120, "p95": 120}
-    assert client.get("/skills", headers=auth).json()[0]["name"] == "code_review"
+    assert "code_review" in [s["name"] for s in client.get("/skills", headers=auth).json()]
 
 
 def test_review_with_manifest_audits_dependencies():

@@ -12,4 +12,9 @@ export default defineConfig({
   server: {
     proxy: { ...Object.fromEntries(paths.map((p) => [p, api])), '/ws': { target: api, ws: true } },
   },
+  // `npm run live`: the built app plus the same proxy, reachable through a Cloudflare quick tunnel.
+  preview: {
+    proxy: { ...Object.fromEntries(paths.map((p) => [p, api])), '/ws': { target: api, ws: true } },
+    allowedHosts: ['.trycloudflare.com'],
+  },
 })

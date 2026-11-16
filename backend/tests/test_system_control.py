@@ -66,10 +66,20 @@ async def test_open_url_safety(mock_ctx):
         mock_run.return_value = (0, "", "")
         res = await skill.run(Args(action="open_url", value="https://example.com"), mock_ctx)
         assert "https://example.com" in res.summary
-        mock_run.assert_called_with("open", "https://example.com")
+        mock_run.assert_called_with("open", "--", "https://example.com")
 
-    with pytest.raises(ValueError, match="only http and https URLs"):
+    with pytest.raises(ValueError, match="only valid http and https URLs"):
         await skill.run(Args(action="open_url", value="file:///etc/passwd"), mock_ctx)
+
+
+@pytest.mark.anyio
+async def test_media_falls_back_to_the_system_media_key(mock_ctx):
+    with patch("app.skills.system_control._run_cmd", new_callable=AsyncMock) as mock_run:
+        mock_run.return_value = (0, "system media key", "")
+        res = await skill.run(Args(action="media", value="next"), mock_ctx)
+
+    assert "key code 17" in mock_run.call_args.args[2]  # works when Spotify and Music are not running
+    assert res.data["player"] == "system media key"
 
 
 @pytest.mark.anyio

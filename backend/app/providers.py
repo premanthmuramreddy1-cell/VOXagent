@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -66,17 +67,41 @@ class TTS(Protocol):
     async def synthesize(self, text: str, language: str) -> bytes: ...  # returns a WAV file
 
 
+def text_tool_call(text: str, names: set[str]) -> ToolCall | None:
+    """Turn a tool call the model wrote as text ('{"name": "list_add", "parameters": {...}}') into a real one.
+
+    Badly formed JSON still counts when it names an offered tool: the call then has no arguments, the agent asks
+    the model for valid ones, and the user never sees the raw text.
+    """
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and data.get("name") in names:
+        args = data.get("parameters", data.get("arguments", {}))
+        return ToolCall(str(data["name"]), args if isinstance(args, dict) else {})
+    found = re.search(r'"name"\s*:\s*"(\w+)"', text)
+    if found and found.group(1) in names:
+        return ToolCall(found.group(1), {})
+    return None
+
+
 class OllamaLLM:
     def __init__(self, model: str):
         self.model, self.name = model, f"ollama:{model}"
 
     async def stream(self, messages, tools=None, schema=None):
-        body: dict[str, Any] = {"model": self.model, "messages": messages, "stream": True}
+        # Ollama's default window (2-4k tokens) silently drops the start of a long chat: the system prompt and
+        # a page the user shared. 16k fits a read page plus history on a laptop.
+        body: dict[str, Any] = {"model": self.model, "messages": messages, "stream": True,
+                                "options": {"num_ctx": 16384}}
         if tools:
             body["tools"] = tools
         if schema:  # structured calls: low temperature and a hard cap so a small model cannot loop
             body["format"] = schema
-            body["options"] = {"temperature": 0.1, "num_predict": 1500}
+            body["options"] |= {"temperature": 0.1, "num_predict": 1500}
+        names = {t["function"]["name"] for t in tools or []}
+        held, holding, tokens = "", None, 0  # small models sometimes write the tool call as text: hold it back
         async with httpx.AsyncClient(base_url=settings().ollama_url, timeout=120) as http:
             async with http.stream("POST", "/api/chat", json=body) as response:
                 response.raise_for_status()
@@ -92,7 +117,20 @@ class OllamaLLM:
                         for c in message.get("tool_calls") or []
                     ]
                     tokens = chunk.get("prompt_eval_count", 0) + chunk.get("eval_count", 0)
-                    yield LLMEvent(message.get("content", ""), calls, tokens)
+                    text = message.get("content", "")
+                    if names and holding is None and text.strip():
+                        holding = text.lstrip().startswith("{")
+                    if holding:
+                        held += text
+                        text = ""
+                    yield LLMEvent(text, calls, tokens)
+        if held:
+            call = text_tool_call(held, names)
+            try:  # bare JSON that is not a call ('{}') is no answer either: never show it to the user
+                held = "" if isinstance(json.loads(held), dict | list) else held
+            except ValueError:
+                pass
+            yield LLMEvent("" if call else held, [call] if call else [], tokens)
 
 
 def _openai_messages(messages: list[dict], schema: dict | None = None) -> list[dict]:
@@ -151,6 +189,17 @@ def _retry_wait(header: str | None, fallback: float) -> float:
 NO_TOOLS = {"role": "system", "content": "No tools are available for this reply. Answer in plain text only."}
 
 
+def _out_of_quota(retry_after: str | None, detail: str) -> bool:
+    """A 429 that will not clear within a turn: a long Retry-After, or a daily or monthly quota message."""
+    try:
+        if float(retry_after or "") > CLOUD_MAX_WAIT_S:
+            return True
+    except ValueError:
+        pass
+    text = detail.lower()
+    return any(word in text for word in ("per day", "daily", "per month", "quota", "insufficient"))
+
+
 class CloudLLM:
     """Any OpenAI-compatible chat completions API (Z.ai GLM, Groq, OpenRouter, Gemini, vLLM...).
 
@@ -192,6 +241,8 @@ class CloudLLM:
                                 yield evt
                             return
                         retryable = response.status_code == 429 or response.status_code >= 500
+                        if response.status_code == 429 and _out_of_quota(response.headers.get("retry-after"), detail):
+                            retryable = False  # minutes or a day away: the next provider (a local model) answers now
                         if not retryable or attempt == CLOUD_ATTEMPTS:
                             raise RuntimeError(f"{response.status_code} from {self.name}: {detail}")
                         wait = _retry_wait(response.headers.get("retry-after"), wait)

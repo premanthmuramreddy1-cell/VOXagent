@@ -110,7 +110,7 @@ def test_failing_skill_is_reported_not_fatal():
 def test_unknown_skill_and_bad_arguments_go_back_to_the_model():
     llm = FakeLLM(plan([("Echo", "echo")]), call("nope"), call(text=["not", "a", "string"]), "ok")
     run(Agent([llm], {"echo": EchoSkill()}), Recorder())
-    assert "no skill called nope" in llm.calls[2]["messages"][-1]["content"]
+    assert "nope is not available" in llm.calls[2]["messages"][-1]["content"]
     assert "Invalid arguments" in llm.calls[3]["messages"][-1]["content"]
 
 
@@ -218,3 +218,109 @@ def test_final_result_does_not_end_the_turn_while_another_planned_skill_is_waiti
     assert brief.runs == 1 and echo.runs == 1  # the second skill was not skipped
     assert answer == "Due soon: Rent today. echoed milk"  # both tools' own words, no model padding after them
     assert len(llm.calls) == 3 and all(s["done"] for s in final_plan["steps"])
+
+
+def test_shortlist_matches_typos_and_plurals_without_a_phrase_list():
+    from app.agent import shortlist
+    from app.skills import discover
+
+    skills = discover()
+    assert "list_add" in shortlist("add milk and bread to my grocery list", skills)
+    assert "list_show" in shortlist("whats on my shoping list", skills)
+    assert "add_reminder" in shortlist("remind me to call mom at 6pm", skills)
+    assert "world_briefing" in shortlist("any news on cricket?", skills)
+    assert shortlist("hi", skills) == []
+    assert shortlist("what is 17 times 23", skills) == []  # one chance word in a description is not a match
+    assert "generate_code" not in shortlist("what is in my readme", skills)
+
+
+def test_empty_plan_offers_the_shortlist_once_and_a_plain_answer_needs_no_tool():
+    echo = EchoSkill()
+    llm = FakeLLM(plan(), call(text="hi"), "Done.")
+    answer, _ = run(Agent([llm], {"echo": echo}), Recorder(), text="please repeat this text back")
+    assert echo.runs == 1 and llm.calls[1]["tools"][0]["function"]["name"] == "echo"
+    assert llm.calls[2]["tools"] is None  # one offer, then no more tools
+    chat = FakeLLM(plan(), "Paris.")
+    answer, _ = run(Agent([chat], {"echo": EchoSkill()}), Recorder(), text="capital of france")
+    assert answer == "Paris." and chat.calls[1]["tools"] is None  # nothing matched, nothing offered
+
+
+def test_a_tool_the_model_was_not_offered_never_runs():
+    echo, other = EchoSkill(), EchoSkill("other")
+    llm = FakeLLM(plan([("Echo", "echo")]), call("other", text="x"), "ok")
+    run(Agent([llm], {"echo": echo, "other": other}), Recorder())
+    assert other.runs == 0 and "other is not available" in llm.calls[2]["messages"][-1]["content"]
+
+
+@pytest.mark.parametrize(("text", "guess", "want"), [
+    ("how is the stock market doing today", "hi", "en"), ("mujhe ek rocket banake dikhao", "hi", "hi"),
+    ("namaste bolo", "hi", "hi"), ("aaj ka news batao", "hi", "hi"),
+    ("नमस्ते", "hi", "hi"), ("hello", "en", "en"),
+])
+def test_latin_text_is_only_hindi_when_it_reads_like_hinglish(text, guess, want):
+    llm = FakeLLM(plan(language=guess), "ok")
+    _, final = run(Agent([llm], {}), Recorder(), text=text)
+    assert final["language"] == want
+
+
+def test_an_empty_answer_with_no_tool_run_never_claims_done():
+    answer, _ = run(Agent([FakeLLM(plan(), "")], {}), Recorder(), text="asdfghjkl")
+    assert answer != "Done." and "another way" in answer
+
+
+@pytest.mark.parametrize(("decision", "sent"), [("yes", 1), ("no", 0)])
+def test_a_filled_form_asks_to_submit_in_the_same_turn(decision, sent):
+    from pydantic import BaseModel
+
+    from app.skills import SkillResult
+
+    class Nothing(BaseModel):
+        pass
+
+    class Fill:
+        name, description, input_schema, permission = "fill", "Fill a form.", Nothing, Permission.READ
+
+        async def run(self, args, ctx):
+            return SkillResult("I filled 3 field(s).", then="send")
+
+    class Send:
+        name, description, input_schema, permission = "send", "Submit it.", Nothing, Permission.CRITICAL
+        runs = 0
+
+        async def run(self, args, ctx):
+            Send.runs += 1
+            return SkillResult("Submitted.")
+
+    recorder = Recorder(decision)
+    llm = FakeLLM(plan([("Fill", "fill")]), call("fill"), "ok")
+    run(Agent([llm], {"fill": Fill(), "send": Send()}), recorder, text="fill this form")
+    assert [c["skill"] for c in recorder.confirms] == ["send"]  # the yes is asked now, not left for a later turn
+    assert Send.runs == sent
+
+
+def test_a_shared_link_is_opened_before_the_model_answers():
+    from pydantic import BaseModel
+
+    from app.skills import SkillResult
+
+    class Url(BaseModel):
+        url: str
+
+    class Fetch:
+        name, description, input_schema, permission = "web_fetch", "Open a page.", Url, Permission.READ
+        opened: list[str] = []
+
+        async def run(self, args, ctx):
+            Fetch.opened.append(args.url)
+            return SkillResult("Kochi Metro: 25 stations, opened 2017.")
+
+    llm = FakeLLM(plan(), "It has 25 stations.")
+    run(Agent([llm], {"web_fetch": Fetch()}), Recorder(),
+        text="how many stations does this have? https://en.wikipedia.org/wiki/Kochi_Metro.")
+    assert Fetch.opened == ["https://en.wikipedia.org/wiki/Kochi_Metro"]  # trailing full stop is not the link
+    assert "25 stations, opened 2017" in llm.calls[1]["messages"][0]["content"]
+
+
+def test_an_echoed_data_tag_never_reaches_the_user():
+    answer, _ = run(Agent([FakeLLM(plan(), "<data>FastAPI is fast.</data>")], {}), Recorder(), text="summarize it")
+    assert answer == "FastAPI is fast."

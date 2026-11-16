@@ -188,3 +188,74 @@ def test_cloud_gives_up_after_one_plain_text_retry_and_never_retries_when_tools_
     with pytest.raises(RuntimeError, match="tool_use_failed"):
         collect(provider, [{"role": "user", "content": "hi"}], tools=tool)
     assert len(hits) == 1
+
+
+@pytest.mark.parametrize(("headers", "body"), [
+    ({"retry-after": "1191"}, '{"error": {"message": "slow down"}}'),
+    ({}, '{"error": {"message": "Rate limit reached on tokens per day (TPD): Limit 200000"}}'),
+])
+def test_cloud_out_of_quota_fails_fast_so_the_local_model_answers(monkeypatch, headers, body):
+    import app.providers as prov
+    from app.providers import llm_stream
+
+    sleeps, hits = [], []
+    monkeypatch.setattr(prov.asyncio, "sleep", lambda s: sleeps.append(s) or asyncio.sleep(0))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(1)
+        return httpx.Response(429, headers=headers, content=body.encode())
+
+    class Local:
+        name = "ollama:test"
+
+        async def stream(self, messages, tools=None, schema=None):
+            from app.providers import LLMEvent
+            yield LLMEvent("from the local model")
+
+    async def run():
+        return [e async for e in llm_stream([CloudLLM("m", transport=httpx.MockTransport(handler)), Local()],
+                                            [{"role": "user", "content": "hi"}])]
+
+    assert "".join(e.text for e in asyncio.run(run())) == "from the local model"
+    assert len(hits) == 1 and sleeps == []  # no retries and no waiting before the fallback
+
+
+def test_tool_calls_written_as_text_become_real_calls():
+    from app.providers import text_tool_call
+
+    names = {"list_add", "add_habit"}
+    good = text_tool_call('{"name": "list_add", "parameters": {"items": ["milk"]}}', names)
+    assert good == ToolCall("list_add", {"items": ["milk"]})
+    broken = text_tool_call('{"name":"add_habit","parameters{"}}', names)  # what llama3.2 really wrote
+    assert broken == ToolCall("add_habit", {})
+    assert text_tool_call('{"name": "rm_rf", "parameters": {}}', names) is None  # not offered: not a call
+    assert text_tool_call("{ not json and no name", names) is None
+
+
+def test_ollama_holds_back_a_text_tool_call_instead_of_showing_it(monkeypatch):
+    from app.providers import OllamaLLM
+
+    lines = [{"message": {"content": '{"name":"list_add",'}}, {"message": {"content": '"parameters{"}}'}},
+             {"message": {"content": ""}, "done": True, "eval_count": 9}]
+    body = "\n".join(json.dumps(x) for x in lines).encode()
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, content=body)), **kw))
+    tool = [{"type": "function", "function": {"name": "list_add", "parameters": {}}}]
+    events = collect(OllamaLLM("llama3.2"), [{"role": "user", "content": "add milk"}], tools=tool)
+    assert "".join(e.text for e in events) == ""  # the user never sees the raw call
+    assert [c.name for e in events for c in e.tool_calls] == ["list_add"]
+    plain = collect(OllamaLLM("llama3.2"), [{"role": "user", "content": "hi"}])  # no tools offered: text as is
+    assert "".join(e.text for e in plain) == '{"name":"list_add","parameters{"}}'
+
+
+def test_ollama_drops_bare_json_that_is_not_a_tool_call(monkeypatch):
+    from app.providers import OllamaLLM
+
+    body = "\n".join(json.dumps(x) for x in [{"message": {"content": "{}"}}, {"done": True}]).encode()
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, content=body)), **kw))
+    tool = [{"type": "function", "function": {"name": "world_briefing", "parameters": {}}}]
+    events = collect(OllamaLLM("llama3.2"), [{"role": "user", "content": "latest news about AI"}], tools=tool)
+    assert "".join(e.text for e in events) == ""  # llama3.2 answered '{}' and the user saw it

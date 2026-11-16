@@ -60,6 +60,15 @@ def test_seatbelt_confines_writes_reads_and_localhost(tmp_path):
 
 
 @macos
+def test_seatbelt_workspace_under_private_data_dir_can_resolve_its_own_path():
+    base = base_of(context())  # real workspaces live inside the data dir the profile hides
+    venv = asyncio.run(sandbox.run(base, "python3 -m venv .venv && .venv/bin/python -c 'print(42)'", timeout=120))
+    assert venv.ok and venv.output.strip().endswith("42"), venv.output  # ensurepip realpath()s the parents
+    siblings = asyncio.run(sandbox.run(base, f"ls {base.parent}"))
+    assert not siblings.ok and "not permitted" in siblings.output  # other workspaces stay unreadable
+
+
+@macos
 def test_fix_loop_repairs_a_real_bug(monkeypatch):
     fixed = "def add(a, b):\n    return a + b\n\nprint(add(2, 3))\n"
     ctx = context(json.dumps({"explanation": "use + instead of -", "files": [{"path": "main.py", "content": fixed}]}))
@@ -121,7 +130,12 @@ def _preview_flow(client):
                 break
             time.sleep(0.3)
         assert page is not None and "preview works" in page.text
+        # the page gets an origin of its own, so its scripts cannot use the viewer's VoxAgent session
+        assert "sandbox allow-scripts" in page.headers["content-security-policy"]
+        assert "allow-same-origin" not in page.headers["content-security-policy"]
         assert client.get("/preview/not-a-real-id/").status_code == 404
+        assert client.get(f"/preview/{server_id}/.git/config").status_code == 404  # a shared link never leaks .git
+        assert client.get(f"/preview/{server_id}/.vox/x").status_code == 404
     finally:
         client.delete(f"/workspaces/{ws}/servers/{started['id']}", headers=headers)
     assert client.get(f"/preview/{started['id']}/").status_code == 404
@@ -192,3 +206,101 @@ def test_preview_proxies_websockets():
             assert reply == "echo:hi"
         finally:
             client.delete(f"/workspaces/{ws}/servers/{started['id']}", headers=headers)
+
+
+def _site_outline(run: str) -> str:
+    return json.dumps({"summary": "Coffee shop site", "design": "warm cream and espresso", "install": "",
+                       "run": run, "web": True,
+                       "files": [{"path": "index.html", "purpose": "home page"},
+                                 {"path": "serve.py", "purpose": "tiny server"},
+                                 {"path": ".venv/bin/python", "purpose": "made by install"}]})
+
+
+SERVE_OK = ("import http.server, os\nos.chdir(os.path.dirname(os.path.abspath(__file__)))\n"
+            "http.server.ThreadingHTTPServer(('0.0.0.0', int(os.environ['PORT'])), "
+            "http.server.SimpleHTTPRequestHandler).serve_forever()\n")
+
+
+@macos
+def test_create_project_writes_each_file_then_proves_the_page_loads(monkeypatch):
+    page = "<!doctype html><title>Bean There</title><h1>Bean There</h1>"
+    ctx = context(_site_outline("python3 serve.py"), page, f"```python\n{SERVE_OK}```")  # fences are stripped
+    result = asyncio.run(run_tools.CreateProject().run(run_tools.ProjectArgs(description="a coffee shop site"), ctx))
+    try:
+        assert "the page loads" in result.summary and result.data["files"] == ["index.html", "serve.py"]
+        assert result.final and result.data["url"] in result.summary  # read out as written: the model dropped the path
+        assert (base_of(ctx) / "index.html").read_text() == page + "\n"
+        second = ctx.complete.await_args_list[2].args[0][1]["content"]
+        assert "--- index.html ---" in second and "Write: serve.py" in second  # each file sees the ones before it
+    finally:
+        for server in list(sandbox.SERVERS.values()):
+            asyncio.run(sandbox.stop_server(server.id))
+
+
+@macos
+def test_create_project_fixes_a_server_that_crashes(monkeypatch):
+    monkeypatch.setattr(run_tools, "search", AsyncMock(return_value=[]))
+    broken = "import http.server, os\nraise RuntimeError('port not read')\n"
+    fix = f"Read PORT and serve.\n=== serve.py ===\n{SERVE_OK}"
+    ctx = context(_site_outline("python3 serve.py"), "<h1>Hi</h1>", broken, fix)
+    result = asyncio.run(run_tools.CreateProject().run(run_tools.ProjectArgs(description="a site"), ctx))
+    try:
+        assert "the page loads" in result.summary
+        assert "port not read" in ctx.complete.await_args_list[3].args[0][1]["content"]  # the fix saw the crash log
+    finally:
+        for server in list(sandbox.SERVERS.values()):
+            asyncio.run(sandbox.stop_server(server.id))
+
+
+@macos
+def test_create_project_fixes_a_failing_install(monkeypatch):
+    monkeypatch.setattr(run_tools, "search", AsyncMock(return_value=[]))
+    outline = json.dumps({"summary": "Tool", "install": "! grep -q sqlite3 requirements.txt", "run": "", "web": False,
+                          "files": [{"path": "requirements.txt", "purpose": "deps"}]})
+    fix = "sqlite3 ships with Python.\n=== requirements.txt ===\nflask\n"
+    ctx = context(outline, "flask\nsqlite3", fix)
+    result = asyncio.run(run_tools.CreateProject().run(run_tools.ProjectArgs(description="a tool"), ctx))
+    assert "Dependencies installed." in result.summary
+    assert (base_of(ctx) / "requirements.txt").read_text() == "flask\n"
+
+
+def test_fix_replies_split_into_files_and_explanation():
+    reply = "Use + instead of -.\n=== src/a.py ===\nx = 1\n=== b.js ===\n```js\nlet y = 2\n```\n"
+    files, why = run_tools.parse_fix(reply)
+    assert why == "Use + instead of -."
+    assert files == [("src/a.py", "x = 1\n"), ("b.js", "let y = 2\n")]
+    legacy = json.dumps({"explanation": "old", "files": [{"path": "m.py", "content": "z\n"}]})
+    assert run_tools.parse_fix(legacy) == ([("m.py", "z\n")], "old")
+    assert run_tools.parse_fix("I could not find the problem.") == ([], "")
+
+
+@pytest.mark.parametrize(("install", "run", "expected"), [
+    ("pip install -r requirements.txt", "python app.py",
+     ("[ -d .venv ] || python3 -m venv .venv; .venv/bin/pip install -q -r requirements.txt", ".venv/bin/python app.py")),
+    ("pip3 install flask", "python3 app.py",
+     ("[ -d .venv ] || python3 -m venv .venv; .venv/bin/pip install -q flask", ".venv/bin/python app.py")),
+    ("npm install", "npm start", ("npm install", "npm start")),
+    ("", "python3 -m http.server $PORT", ("", "python3 -m http.server $PORT")),
+])
+def test_project_commands_use_a_virtualenv_for_python(install, run, expected):
+    assert run_tools.runnable(install, run) == expected
+
+
+def test_a_site_with_no_home_page_does_not_count_as_loading(tmp_path):
+    import functools
+    import http.server
+    import threading
+    from types import SimpleNamespace
+
+    (tmp_path / "layout.html").write_text("<h1>Brew Haven</h1>")  # what llama3.2 wrote: no index.html
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        server = SimpleNamespace(host="127.0.0.1", port=httpd.server_address[1], running=True)
+        ok, note = asyncio.run(run_tools._responds(server))
+        assert not ok and "index.html" in note
+        (tmp_path / "index.html").write_text("<h1>Brew Haven</h1>")
+        assert asyncio.run(run_tools._responds(server))[0]
+    finally:
+        httpd.shutdown()

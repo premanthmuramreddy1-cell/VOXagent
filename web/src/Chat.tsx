@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import type { ServerEvent } from './api'
 import { api, post, Socket, upload } from './api'
 import { Mic, Player } from './audio'
+import { setSwarmMood } from './swarmEngine'
+import { BuildCard, NewsDeck } from './BotDeck'
+import { buildCredit, importModel, isModel, playBuild, playNews, releaseBots, type Briefing, type Build } from './botShow'
 import {
   Mic as MicIcon,
   Send,
@@ -36,8 +39,10 @@ type Extra =
   | { kind: 'email'; to: string[]; subject: string; body: string }
   | { kind: 'form'; url: string; screenshot: string; filled: { field: string }[]; missing: string[] }
   | { kind: 'order'; status: string; note: string; url: string; steps: string[]; total: string; final_button: string; screenshot: string }
+  | { kind: 'news'; data: Briefing }
+  | { kind: 'build'; build: Build }
 type Item = {
-  role: 'user' | 'assistant'; text: string; restate?: string; steps?: Step[]; tools?: Tool[]; live?: boolean; extras?: Extra[]
+  role: 'user' | 'assistant'; text: string; restate?: string; understood?: string; steps?: Step[]; tools?: Tool[]; live?: boolean; extras?: Extra[]
 }
 
 const ORDER_STATUS: Record<string, string> = {
@@ -57,6 +62,8 @@ function Extras({ extras }: { extras: Extra[] }) {
   return (
     <>
       {extras.map((extra, i) => {
+        if (extra.kind === 'news') return <NewsDeck key={i} data={extra.data} />
+        if (extra.kind === 'build') return <BuildCard key={i} build={extra.build} />
         if (extra.kind === 'terminal') {
           return (
             <pre key={i} className="code-layer max-h-64 overflow-auto rounded-xl border border-line bg-surface text-[12px] text-ink">
@@ -79,9 +86,13 @@ function Extras({ extras }: { extras: Extra[] }) {
         }
         if (extra.kind === 'server') {
           return (
-            <a key={i} href={extra.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-xl border border-ok/40 bg-ok-subtle px-3 py-2 font-mono text-xs text-ok">
-              <ExternalLink className="h-3.5 w-3.5" /> Preview running: {extra.url}
-            </a>
+            <div key={i} className="overflow-hidden rounded-xl border border-ok/40">
+              <a href={extra.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 bg-ok-subtle px-3 py-2 font-mono text-xs text-ok">
+                <ExternalLink className="h-3.5 w-3.5" /> Open full page <span className="truncate text-ok/70">{extra.url}</span>
+              </a>
+              {/* The site opens right here; the preview's own sandbox header keeps it away from VoxAgent's cookies. */}
+              <iframe title="Live preview of the site" src={extra.url} className="h-80 w-full bg-white" loading="lazy" />
+            </div>
           )
         }
         if (extra.kind === 'email') {
@@ -132,6 +143,15 @@ function Extras({ extras }: { extras: Extra[] }) {
     </>
   )
 }
+const QUICK = [
+  ['Build a website', 'Plans, writes, runs and previews it', 'Build a website for a neighbourhood coffee shop with a menu, opening hours and a contact form'],
+  ['Order from a link', 'Walks to checkout, waits for your yes', 'Order 2 iced lattes with oat milk from '],
+  ['Review my code', 'Security, bugs and a score', 'Review the codebase for bugs and security vulnerabilities.'],
+  ['Edit many files', 'Staged diffs you accept or reject', 'Rename getUser to fetchUser everywhere'],
+  ['Build it in 3D', 'The bots assemble any object', 'Make a 3d guitar'],
+  ['World briefing', 'Headlines and markets, decoded by bots', "What's going on in the world right now?"],
+] as const
+
 type Session = { id: string; title: string }
 type Confirm = { id: string; skill: string; permission: string }
 
@@ -152,6 +172,9 @@ function apply(items: Item[], event: ServerEvent): Item[] {
       else next.push({ role: 'user', text: event.text, live })
       break
     }
+    case 'agent.understood':
+      draft().understood = event.text
+      break
     case 'agent.restate':
       draft().restate = event.text
       break
@@ -194,6 +217,21 @@ function apply(items: Item[], event: ServerEvent): Item[] {
       item.extras = extras
       break
     }
+    case 'world.briefing': {
+      const item = draft()
+      item.extras = [...(item.extras ?? []), { kind: 'news', data: event as unknown as Briefing }]
+      break
+    }
+    case 'swarm.build': {
+      const item = draft()
+      const build: Build = event.points
+        ? { name: event.name, source: 'real model', detail: buildCredit(event.credit) }
+        : event.builtin
+          ? { name: event.name, source: 'ready-made', detail: 'built from memory' }
+          : { name: event.name, source: 'designed', detail: `designed from ${event.parts?.length ?? 0} parts` }
+      item.extras = [...(item.extras ?? []), { kind: 'build', build }]
+      break
+    }
     case 'answer.delta':
       draft().text += event.text
       break
@@ -232,7 +270,7 @@ function Bubble({ item }: { item: Item }) {
   if (item.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="group relative max-w-xl sm:max-w-2xl rounded-2xl rounded-tr-xs border border-line bg-raised px-4 py-3 shadow-xs">
+        <div className="group relative max-w-xl sm:max-w-2xl rounded-2xl rounded-tr-xs border border-line/60 bg-raised/40 px-4 py-3">
           <p className={`whitespace-pre-wrap break-words text-sm leading-relaxed ${item.live ? 'text-muted italic' : 'text-ink'}`}>
             {item.text || '…'}
           </p>
@@ -260,6 +298,12 @@ function Bubble({ item }: { item: Item }) {
           <div className="rounded-xl border border-line bg-surface/70 px-3.5 py-2 font-mono text-xs">
             <span className="font-semibold text-accent uppercase tracking-wider">Plan Target: </span>
             <span className="text-muted">{item.restate}</span>
+            {item.understood && (
+              <p className="mt-1 text-muted">
+                <span className="font-semibold text-accent uppercase tracking-wider">Read as: </span>
+                {item.understood}
+              </p>
+            )}
           </div>
         )}
 
@@ -383,7 +427,7 @@ function Bubble({ item }: { item: Item }) {
 
         {/* Text Answer */}
         {(item.text || item.live) && (
-          <div className="relative rounded-2xl rounded-tl-xs border border-line/80 bg-raised px-4 py-3 shadow-xs">
+          <div className="relative rounded-2xl rounded-tl-xs border border-line/50 bg-raised/40 px-4 py-3">
             <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">
               {item.text}
               {item.live && (
@@ -422,7 +466,7 @@ export default function Chat() {
   const [speak, setSpeak] = useState(true)
   const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [error, setError] = useState<{ message: string; retry?: () => void } | null>(null)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(() => innerWidth >= 768)
 
   const socket = useRef<Socket | null>(null)
   const player = useRef(new Player())
@@ -443,6 +487,11 @@ export default function Chat() {
     return () => mic.current?.close()
   }, [])
 
+  // The swarm mirrors the conversation: it breathes while listening, swirls while thinking, ripples while speaking.
+  useEffect(() => {
+    setSwarmMood(recording ? 'listen' : speaking ? 'speak' : busy ? 'think' : 'idle')
+  }, [recording, speaking, busy])
+
   useEffect(() => {
     if (!current) return
     setItems([])
@@ -459,6 +508,8 @@ export default function Chat() {
           return setBusy(false)
         }
         if (event.type === 'tts.stop') player.current.stop()
+        if (event.type === 'swarm.build') playBuild(event as any)
+        if (event.type === 'world.briefing') playNews(event as unknown as Briefing)
         if (event.type === 'turn.done' || event.type === 'tts.stop') {
           setBusy(false)
           setConfirm(null)
@@ -561,12 +612,46 @@ export default function Chat() {
 
   async function attach(file?: File) {
     if (!file) return
+    if (isModel(file)) return importFile(file)
     try {
       setAttached(await upload(file))
     } catch (e) {
       setError({ message: (e as Error).message })
     }
   }
+
+  /** A 3D model goes to the bots, not to the server: they rebuild it in the browser. */
+  async function importFile(file: File) {
+    try {
+      const build = await importModel(file)
+      setItems((list) => [...list, { role: 'assistant', text: `Imported ${file.name}. The bots rebuilt it.`, extras: [{ kind: 'build', build }] }])
+    } catch (e) {
+      setError({ message: (e as Error).message })
+    }
+  }
+
+  // A .glb dropped anywhere on the page goes to the bots; Esc lets them go.
+  useEffect(() => {
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+    const onOver = (e: DragEvent) => hasFiles(e) && e.preventDefault()
+    const onDrop = (e: DragEvent) => {
+      const file = e.dataTransfer?.files?.[0]
+      if (!file) return
+      e.preventDefault()
+      if (isModel(file)) importFile(file)
+      else attach(file)
+    }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && releaseBots()
+    addEventListener('dragover', onOver)
+    addEventListener('drop', onDrop)
+    addEventListener('keydown', onKey)
+    return () => {
+      removeEventListener('dragover', onOver)
+      removeEventListener('drop', onDrop)
+      removeEventListener('keydown', onKey)
+      releaseBots()
+    }
+  }, [])
 
   async function createSession() {
     const created = await post<Session>('/sessions')
@@ -580,7 +665,7 @@ export default function Chat() {
     <div className="flex h-full w-full overflow-hidden">
       {/* Left Sidebar for Sessions */}
       <aside
-        className={`no-print shrink-0 border-r border-line bg-surface/40 flex flex-col transition-all duration-200 ease-in-out ${
+        className={`no-print shrink-0 border-r border-line bg-surface glass flex flex-col transition-all duration-200 ease-in-out ${
           sidebarOpen ? 'w-64' : 'w-0'
         } overflow-hidden`}
       >
@@ -625,9 +710,9 @@ export default function Chat() {
       </aside>
 
       {/* Main Chat Conversation Area */}
-      <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden bg-surface">
+      <div className="relative flex-1 flex flex-col h-full min-w-0 overflow-hidden">
         {/* Top Chat Subheader */}
-        <div className="no-print h-12 border-b border-line px-4 sm:px-6 flex items-center justify-between shrink-0 bg-surface/70 backdrop-blur-xs">
+        <div className="no-print h-12 border-b border-line px-4 sm:px-6 flex items-center justify-between shrink-0 bg-surface glass">
           <div className="flex items-center gap-3 min-w-0">
             {/* Sidebar Toggle Button */}
             <button
@@ -692,36 +777,39 @@ export default function Chat() {
         </div>
 
         {/* Scrollable Messages Stream */}
-        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6" aria-live="polite">
-          <div className="max-w-3xl mx-auto space-y-6">
+        {/* The bots' stage: the whole conversation area, with the chat column centred over it. */}
+        <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-12 bottom-0" data-swarm-stage />
+        <div className="chat-rail chat-fade flex-1 overflow-y-auto px-4 sm:px-6 py-6" aria-live="polite">
+          <div className="max-w-2xl mx-auto space-y-6">
             {items.length === 0 && (
-              <div className="my-auto flex flex-col items-center justify-center py-16 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-line bg-surface shadow-xs">
-                  <Sparkles className="h-7 w-7 text-accent" />
-                </div>
-                <h2 className="mt-4 font-mono text-base font-semibold text-ink">Welcome to VoxAgent</h2>
-                <p className="mt-1.5 max-w-sm text-xs text-muted leading-relaxed">
-                  Hold the microphone button to speak, toggle hands-free voice mode, or type your request below.
+              <div className="my-auto flex flex-col items-center justify-center pb-10 text-center">
+                {/* The swarm's brain floats here, behind the page: this space is left open for it. */}
+                <div className="h-44 sm:h-56" aria-hidden="true" />
+                <h2 className="font-mono text-base font-semibold text-ink">Say it once. The swarm does the rest.</h2>
+                <p className="mt-1.5 max-w-sm text-sm text-muted leading-relaxed">
+                  Hold the mic or type. Typos are fine: I fix the spelling and show you what I read.
                 </p>
-
-                {/* Quick Prompt Cards */}
-                <div className="mt-8 grid w-full max-w-md gap-2.5 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setText('Review the codebase for bugs and security vulnerabilities.')}
-                    className="rounded-xl border border-line bg-raised p-3.5 text-left transition-colors hover:border-accent hover:bg-surface"
-                  >
-                    <div className="font-mono text-xs font-semibold text-ink">Inspect Codebase</div>
-                    <div className="mt-0.5 text-[11px] text-muted">Run AST security & lint audits</div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setText('What skills and capabilities do you have?')}
-                    className="rounded-xl border border-line bg-raised p-3.5 text-left transition-colors hover:border-accent hover:bg-surface"
-                  >
-                    <div className="font-mono text-xs font-semibold text-ink">Explore Skills</div>
-                    <div className="mt-0.5 text-[11px] text-muted">List tools and execution stages</div>
-                  </button>
+                <div className="mt-8 grid w-full max-w-lg gap-2.5 sm:grid-cols-2">
+                  {QUICK.map(([title, hint, prompt]) => (
+                    <button
+                      key={title}
+                      type="button"
+                      onClick={() => setText(prompt)}
+                      className="glass min-h-11 rounded-xl border border-line bg-raised p-3.5 text-left transition-colors hover:border-accent"
+                    >
+                      <div className="font-mono text-xs font-semibold text-ink">{title}</div>
+                      <div className="mt-0.5 text-xs text-muted">{hint}</div>
+                    </button>
+                  ))}
+                  <label className="glass min-h-11 cursor-pointer rounded-xl border border-dashed border-line bg-raised p-3.5 text-left transition-colors hover:border-accent focus-within:border-accent sm:col-span-2">
+                    <div className="font-mono text-xs font-semibold text-ink">Import a 3D model</div>
+                    <div className="mt-0.5 text-xs text-muted">Pick or drop a .glb file: the bots rebuild it right here</div>
+                    <input type="file" accept=".glb,model/gltf-binary" className="sr-only" onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) importFile(file)
+                      e.target.value = ''
+                    }} />
+                  </label>
                 </div>
               </div>
             )}
@@ -790,8 +878,8 @@ export default function Chat() {
         )}
 
         {/* Floating / Docked Input Controls */}
-        <div className="no-print border-t border-line bg-surface/90 px-4 sm:px-6 py-3.5 backdrop-blur-md shrink-0">
-          <div className="max-w-3xl mx-auto space-y-2.5">
+        <div className="chat-rail no-print border-t border-line bg-surface px-4 sm:px-6 py-3.5 glass shrink-0 lg:border-t-0 lg:bg-transparent lg:backdrop-blur-none lg:bg-none">
+          <div className="max-w-2xl mx-auto space-y-2.5">
             {/* Attachment Chip */}
             {attached && (
               <div className="inline-flex items-center gap-2 rounded-lg border border-accent/30 bg-accent-subtle px-3 py-1 font-mono text-xs text-accent">
@@ -852,7 +940,7 @@ export default function Chat() {
                     <button
                       type="submit"
                       disabled={!text.trim() && !attached}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-surface transition-opacity disabled:opacity-30"
+                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-on-accent transition-opacity disabled:opacity-30"
                       title="Send message"
                     >
                       <Send className="h-3.5 w-3.5" />
@@ -867,7 +955,7 @@ export default function Chat() {
                 aria-pressed={recording}
                 className={`relative flex h-11 min-w-36 shrink-0 select-none items-center justify-center gap-2 rounded-xl font-mono text-xs font-semibold transition-all duration-150 ${
                   recording
-                    ? 'border border-accent bg-accent text-surface shadow-lg shadow-accent/25 scale-[1.02]'
+                    ? 'border border-accent bg-accent text-on-accent shadow-lg shadow-accent/25 scale-[1.02]'
                     : 'border border-line bg-raised text-ink hover:border-accent hover:bg-surface active:scale-[0.98]'
                 }`}
                 onPointerDown={() => talk(true)}

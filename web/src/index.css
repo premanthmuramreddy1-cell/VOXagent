@@ -1,40 +1,51 @@
 @import "tailwindcss";
 
+/* Nanoswarm: a deep-space instrument. The page is a living field of nanobots (src/swarmEngine.ts); every surface
+   is translucent glass over it, textured with a faint dot matrix so panels read as assembled from bots.
+   One bioluminescent accent (cyan), violet only inside the swarm. Tokens are roles, never raw colours. */
 :root {
-  --surface: #f8fafc;
-  --raised: #ffffff;
-  --raised-hover: #f1f5f9;
-  --line: #e2e8f0;
-  --ink: #0f172a;
-  --muted: #64748b;
-  --accent: #d97706;
-  --accent-hover: #b45309;
-  --accent-subtle: rgba(217, 119, 6, 0.1);
-  --ok: #059669;
-  --ok-subtle: rgba(5, 150, 105, 0.1);
-  --warn: #d97706;
-  --warn-subtle: rgba(217, 119, 6, 0.1);
-  --danger: #e11d48;
-  --danger-subtle: rgba(225, 29, 72, 0.1);
+  --void: #eef3fa;
+  --void-glow: #dbe7f7;
+  --surface: rgba(244, 247, 252, 0.72);
+  --raised: rgba(255, 255, 255, 0.8);
+  --raised-hover: rgba(255, 255, 255, 0.95);
+  --line: rgba(30, 60, 110, 0.16);
+  --dot: rgba(10, 126, 164, 0.10);
+  --ink: #0b1424;
+  --muted: #4b5b75;
+  --accent: #0a7ea4;
+  --accent-hover: #075f7d;
+  --accent-subtle: rgba(10, 126, 164, 0.12);
+  --on-accent: #ffffff;
+  --ok: #047857;
+  --ok-subtle: rgba(4, 120, 87, 0.12);
+  --warn: #a16207;
+  --warn-subtle: rgba(161, 98, 7, 0.12);
+  --danger: #be123c;
+  --danger-subtle: rgba(190, 18, 60, 0.1);
   color-scheme: light;
 }
 
 :root[data-theme="dark"] {
-  --surface: #0a0c10;
-  --raised: #12151c;
-  --raised-hover: #191e28;
-  --line: #202634;
-  --ink: #f3f4f6;
-  --muted: #8590a5;
-  --accent: #f59e0b;
-  --accent-hover: #fbbf24;
-  --accent-subtle: rgba(245, 158, 11, 0.12);
-  --ok: #10b981;
-  --ok-subtle: rgba(16, 185, 129, 0.12);
-  --warn: #f59e0b;
-  --warn-subtle: rgba(245, 158, 11, 0.12);
-  --danger: #f43f5e;
-  --danger-subtle: rgba(244, 63, 94, 0.12);
+  --void: #03050b;
+  --void-glow: #0b1430;
+  --surface: rgba(5, 8, 18, 0.6);
+  --raised: rgba(12, 18, 36, 0.66);
+  --raised-hover: rgba(22, 32, 60, 0.78);
+  --line: rgba(110, 200, 255, 0.16);
+  --dot: rgba(94, 231, 255, 0.07);
+  --ink: #e8f1ff;
+  --muted: #93a6c6;
+  --accent: #5ee7ff;
+  --accent-hover: #a5f3ff;
+  --accent-subtle: rgba(94, 231, 255, 0.12);
+  --on-accent: #02121a;
+  --ok: #4ade80;
+  --ok-subtle: rgba(74, 222, 128, 0.12);
+  --warn: #fbbf24;
+  --warn-subtle: rgba(251, 191, 36, 0.12);
+  --danger: #fb7185;
+  --danger-subtle: rgba(251, 113, 133, 0.12);
   color-scheme: dark;
 }
 
@@ -48,6 +59,7 @@
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
   --color-accent-subtle: var(--accent-subtle);
+  --color-on-accent: var(--on-accent);
   --color-ok: var(--ok);
   --color-ok-subtle: var(--ok-subtle);
   --color-warn: var(--warn);
@@ -69,7 +81,7 @@ html, body, #root {
 
 body {
   margin: 0;
-  background-color: var(--surface);
+  background: radial-gradient(120% 90% at 50% 38%, var(--void-glow), var(--void) 70%) fixed, var(--void);
   color: var(--ink);
   font: 15px/1.6 var(--font-sans);
   -webkit-font-smoothing: antialiased;
@@ -105,7 +117,7 @@ body {
     @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-line bg-raised px-3.5 py-2 font-mono text-xs font-medium text-ink transition-all duration-150 hover:border-muted/50 hover:bg-raised-hover active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none;
   }
   .btn-accent {
-    @apply border-accent bg-accent text-surface font-semibold hover:opacity-90 active:scale-[0.98];
+    @apply border-accent bg-accent text-on-accent font-semibold hover:opacity-90 active:scale-[0.98];
   }
   .btn-ghost {
     @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-transparent bg-transparent px-3 py-2 font-mono text-xs font-medium text-muted transition-all duration-150 hover:bg-raised hover:text-ink active:scale-[0.98];
@@ -114,14 +126,65 @@ body {
     @apply min-h-10 w-full rounded-xl border border-line bg-raised px-3.5 py-2 text-sm text-ink placeholder:text-muted/60 transition-colors focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent;
   }
   .panel {
-    @apply rounded-2xl border border-line bg-raised shadow-xs;
+    @apply rounded-2xl border border-line bg-raised backdrop-blur-xl;
+    background-image: radial-gradient(var(--dot) 0.7px, transparent 0.9px);
+    background-size: 6px 6px;
+  }
+  /* Bot-driven cards (news deck, built objects): an instrument panel with a lit top edge. */
+  .deck {
+    @apply backdrop-blur-xl;
+    position: relative;
+    background-image: radial-gradient(var(--dot) 0.7px, transparent 0.9px);
+    background-size: 6px 6px;
+  }
+  .deck::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0.7;
+    pointer-events: none;
+  }
+  .chip {
+    @apply inline-flex items-center rounded-md border border-line px-1.5 py-0.5 text-muted;
   }
   .panel-glass {
-    @apply rounded-2xl border border-line/70 bg-raised/80 backdrop-blur-md shadow-xs;
+    @apply rounded-2xl border border-line bg-raised backdrop-blur-xl;
+    background-image: radial-gradient(var(--dot) 0.7px, transparent 0.9px);
+    background-size: 6px 6px;
+  }
+  .glass {
+    @apply backdrop-blur-xl;
+    background-image: radial-gradient(var(--dot) 0.7px, transparent 0.9px);
+    background-size: 6px 6px;
   }
   .cell {
     @apply border-b border-line px-3.5 py-2.5 text-left align-top;
   }
+}
+
+/* The conversation stays legible but quiet: older messages fade out at the top, and the whole rail steps back
+   while the bots are performing (built object, news, a spelled line) until the user points at it. */
+.chat-fade {
+  mask-image: linear-gradient(to bottom, transparent, #000 22%);
+}
+.chat-rail {
+  transition: opacity 400ms ease-out;
+}
+[data-botshow] .chat-rail:not(:hover):not(:focus-within) {
+  opacity: 0.28;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-rail { transition: none; }
+}
+
+/* The swarm sits under everything; a vignette keeps text over its centre readable. */
+.swarm-backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(80% 70% at 50% 45%, transparent 40%, var(--void) 100%);
 }
 
 /* Code editor: a transparent textarea over a highlighted <pre>, same metrics so the caret lines up. */

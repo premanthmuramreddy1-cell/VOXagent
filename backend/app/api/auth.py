@@ -4,7 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -53,15 +53,21 @@ def _issue(user: User, db: Session, response: Response) -> dict:
     return {"access_token": make_access_token(user.id), "user": _profile(user)}
 
 
+LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
 @router.post("/auth/signup", dependencies=[Depends(rate_limit)])
-def signup(body: Credentials, response: Response, db: Session = Depends(get_db)) -> dict:
+def signup(body: Credentials, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     email = body.email.lower()
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(409, "email already registered")
     admins = {e.lower() for e in settings().admin_emails}
+    # Nobody proves they own the address here, so a listed admin email only counts when the sign-up comes from the
+    # machine VoxAgent runs on (its owner). Over a public link, admins sign in with Google, which verifies the email.
+    local = request.client is not None and request.client.host in LOCAL_HOSTS
     user = User(
         email=email, password_hash=hash_password(body.password), name=body.name.strip(),
-        is_admin=email in admins,
+        is_admin=email in admins and local,
     )
     db.add(user)
     try:
