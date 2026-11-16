@@ -81,6 +81,34 @@ def test_cloud_keeps_parallel_tool_calls_apart_when_index_is_missing():
     assert events[-1].tool_calls == [ToolCall("weather", {"city": "Paris"}), ToolCall("time_in", {"city": "Paris"})]
 
 
+SIG = {"google": {"thought_signature": "sig-abc"}}
+
+
+def test_cloud_keeps_gemini_thought_signature_with_the_call():
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse({"choices": [{"delta": {"tool_calls": [
+            {"id": "a", "type": "function", "extra_content": SIG,
+             "function": {"name": "weather", "arguments": '{"city": "Paris"}'}}]}}]}))
+
+    events = collect(CloudLLM("m", transport=httpx.MockTransport(handler)), [{"role": "user", "content": "w"}],
+                     tools=[{"type": "function"}])
+    assert events[-1].tool_calls[0].meta == {"id": "a", "extra_content": SIG}
+
+
+def test_history_sends_the_thought_signature_back():
+    # Gemini 3 rejects the next step with "Function call is missing a thought_signature" without this.
+    from app.providers import _openai_messages
+
+    out = _openai_messages([
+        {"role": "user", "content": "weather?"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "a", "extra_content": SIG, "function": {"name": "weather", "arguments": {"city": "Paris"}}}]},
+        {"role": "tool", "content": "sunny"},
+    ])
+    assert out[1]["tool_calls"][0]["id"] == "a" and out[1]["tool_calls"][0]["extra_content"] == SIG
+    assert out[2]["tool_call_id"] == "a"
+
+
 def test_cloud_asks_for_usage_in_the_stream():
     sent: dict = {}
 

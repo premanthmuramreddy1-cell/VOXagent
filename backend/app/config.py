@@ -18,8 +18,8 @@ class Settings(BaseSettings):
 
     # Providers, swappable by config. "a,b" means: try a, fall back to b.
     # cloud:<model> is any OpenAI-compatible API; Gemini by default. flash-lite answers in ~1-3 s, which a voice turn
-    # needs; 3.8-flash is the stronger cloud fallback; ollama answers when the cloud is out.
-    llm: str = "cloud:gemini-3.1-flash-lite,cloud:gemini-3.8-flash,ollama:llama3.2"
+    # needs; 3.5-flash-lite is the cloud fallback (3.8-flash timed out under load); ollama answers when the cloud is out.
+    llm: str = "cloud:gemini-3.1-flash-lite,cloud:gemini-3.5-flash-lite,ollama:llama3.2"
     llm_api_key: str = ""  # Gemini key from aistudio.google.com/apikey (or Groq, OpenRouter, z.ai with their base URL)
     llm_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     stt: str = "whisper:small"

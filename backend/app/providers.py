@@ -31,6 +31,8 @@ class ProviderError(Exception):
 class ToolCall:
     name: str
     arguments: dict[str, Any]
+    # Provider data that must go back with the call next turn (its id; Gemini's thought signature). Not identity.
+    meta: dict[str, Any] = field(default_factory=dict, compare=False)
 
 
 @dataclass
@@ -157,6 +159,7 @@ def _openai_messages(messages: list[dict], schema: dict | None = None) -> list[d
                         "name": function.get("name", ""),
                         "arguments": arguments if isinstance(arguments, str) else json.dumps(arguments),
                     },
+                    **({"extra_content": call["extra_content"]} if call.get("extra_content") else {}),
                 })
             out.append({"role": "assistant", "content": message.get("content") or "", "tool_calls": calls})
             continue
@@ -277,6 +280,9 @@ class CloudLLM:
                                     if index is None:  # Gemini: no index, each call arrives whole with its own id
                                         index = len(calls) if call.get("id") or not calls else max(calls)
                                     slot = calls.setdefault(int(index), {"name": "", "arguments": ""})
+                                    for key in ("id", "extra_content"):  # Gemini 3 needs its signature back
+                                        if call.get(key):
+                                            slot[key] = call[key]
                                     function = call.get("function") or {}
                                     slot["name"] += function.get("name") or ""
                                     arguments = function.get("arguments")
@@ -294,7 +300,8 @@ class CloudLLM:
                                 arguments = json.loads(raw)
                             except ValueError:  # torn arguments: let the agent ask for valid ones
                                 arguments = {}
-                            parsed.append(ToolCall(calls[index]["name"], arguments))
+                            meta = {k: calls[index][k] for k in ("id", "extra_content") if k in calls[index]}
+                            parsed.append(ToolCall(calls[index]["name"], arguments, meta))
                         yield LLMEvent(tool_calls=parsed, tokens=tokens)
                         return
             await asyncio.sleep(wait)

@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.agent import Agent
 from app.db import Activity, ErrorEvent, SessionLocal
-from app.providers import ProviderError, first_ok, llm_stream
+from app.providers import ProviderError, ToolCall, first_ok, llm_stream
 from app.skills import Permission, discover
 from app.spoken import normalize
 from tests.fakes import EchoSkill, FakeLLM, Recorder, call, plan
@@ -43,6 +43,14 @@ def test_agent_runs_planned_skill_and_ticks_checklist():
     assert llm.calls[1]["tools"][0]["function"]["name"] == "echo"
     assert llm.calls[2]["tools"] is None  # the skill already ran
     assert llm.calls[2]["messages"][-1]["content"] == "<data>echoed hi</data>"  # tool output is fenced as data
+
+
+def test_agent_keeps_tool_call_id_and_signature_in_history():
+    meta = {"id": "a", "extra_content": {"google": {"thought_signature": "sig"}}}
+    llm = FakeLLM(plan([("Echo it", "echo")]), [ToolCall("echo", {"text": "hi"}, meta=meta)], "done")
+    run(Agent([llm], {"echo": EchoSkill()}), Recorder())
+    sent = next(m for m in llm.calls[2]["messages"] if m.get("tool_calls"))["tool_calls"][0]
+    assert sent["id"] == "a" and sent["extra_content"] == meta["extra_content"]
 
 
 def test_agent_only_offers_skills_the_plan_asked_for():

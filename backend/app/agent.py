@@ -251,7 +251,7 @@ class Agent:
             unspoken = [] if answer and not read_out else unspoken  # the model worded the earlier ones
             messages.append({
                 "role": "assistant", "content": "",
-                "tool_calls": [{"function": {"name": c.name, "arguments": c.arguments}} for c in calls],
+                "tool_calls": [{"function": {"name": c.name, "arguments": c.arguments}, **c.meta} for c in calls],
             })
             retry = set()  # tools called with arguments that failed validation: the model may try them again
             for call in calls:
