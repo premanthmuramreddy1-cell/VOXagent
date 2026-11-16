@@ -31,6 +31,9 @@ type Issue = {
   source: string
 }
 
+/** A row of the review history: the list endpoint sends counts, not the issues themselves. */
+type Summary = { id: string; source: string; score: number; issue_count: number; created_at: string }
+
 type Report = {
   id: string
   source: string
@@ -382,8 +385,9 @@ export function SharedReview({ token }: { token: string }) {
 }
 
 export default function Reviews({ id }: { id?: string }) {
-  const [list, setList] = useState<Report[]>([])
-  const [report, setReport] = useState<Report | null>(null)
+  const [list, setList] = useState<Summary[]>([])
+  const [loaded, setReport] = useState<Report | null>(null)
+  const report = loaded?.id === id ? loaded : null // the last fetch may belong to the review shown before
   const [code, setCode] = useState('')
   const [url, setUrl] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -396,8 +400,14 @@ export default function Reviews({ id }: { id?: string }) {
   }, [report])
 
   useEffect(() => {
-    setReport(null)
-    if (id) api(`/reviews/${id}`).then(setReport).catch((e) => setError(e.message))
+    if (!id) return
+    let live = true // a slower earlier fetch must not replace the review now open
+    api(`/reviews/${id}`)
+      .then((r) => live && setReport(r))
+      .catch((e) => live && setError(e.message))
+    return () => {
+      live = false
+    }
   }, [id])
 
   async function run(event: React.FormEvent) {
@@ -589,7 +599,7 @@ export default function Reviews({ id }: { id?: string }) {
                         </span>
                         <div className="min-w-0">
                           <p className="truncate font-semibold text-ink">{item.source}</p>
-                          <p className="text-[11px] text-muted">{item.issues.length} issues identified</p>
+                          <p className="text-[11px] text-muted">{item.issue_count} issues identified</p>
                         </div>
                       </div>
 

@@ -353,7 +353,8 @@ class OpenArgs(BaseModel):
 
 class OpenWorkspace(Tool):
     name, input_schema = "open_workspace", OpenArgs
-    description = "Switch to another project workspace by name, creating it if it does not exist."
+    description = ("Switch to another of the user's coding project workspaces by name ('open my blog project'), "
+                   "creating it if it does not exist. Never for apps or websites: that is system_control.")
 
     async def act(self, args, ctx, db, space):
         target = db.scalar(select(Workspace).where(Workspace.user_id == ctx.user_id, Workspace.name == args.name))

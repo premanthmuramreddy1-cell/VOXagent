@@ -179,10 +179,11 @@ class BuildArgs(BaseModel):
 
 class BuildObject:
     name, input_schema, permission = "build_object", BuildArgs, Permission.READ
-    description = ("Make the on-screen bots (nanobots) form any physical object in 3D: 'make a 3d guitar', "
+    description = ("Make any 3D model of any object, animal, vehicle, building or place with the on-screen bots "
+                   "(nanobots): 'make a 3d guitar', 'create a 3d model of a dragon', 'show me a car in 3d', "
                    "'can the bots make a violin', 'show me a rocket in 3d', 'import a bottle', 'import tree', "
                    "'show me the solar system'. 'Import' followed by an everyday object always means this, never a "
-                   "code import. Not for websites, apps or code: that is create_project. Real 3D scans are used "
+                   "code import. Never for software: that is create_project. Real 3D scans are used "
                    "when one exists; anything else is designed on the spot.")
 
     async def run(self, args: BuildArgs, ctx: RunContext) -> SkillResult:

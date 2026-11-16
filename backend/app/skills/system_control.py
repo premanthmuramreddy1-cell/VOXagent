@@ -169,8 +169,9 @@ async def handle_folder(path: str) -> tuple[str, dict[str, Any]]:
 class SystemControl:
     name = "system_control"
     description = (
-        "Control your laptop: adjust audio volume (0-100 or mute/unmute), control media playback (play/pause/next), "
-        "launch or close applications, open web URLs or folders in Finder, check battery percentage, or lock screen. "
+        "Control this computer: set or mute the volume, play, pause or skip music, open or quit any app "
+        "('open Spotify', 'quit Safari'), open a website in the browser ('open youtube.com'), open a folder in "
+        "Finder, check the battery ('how much battery do I have'), or lock the screen. "
         "Use when the user asks to control system hardware, launch software, or check power/audio."
     )
     input_schema = Args

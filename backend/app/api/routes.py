@@ -99,7 +99,8 @@ async def create_review(args: Args, user: User = Depends(current_user), db: Sess
 @router.get("/reviews")
 def list_reviews(user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
     rows = db.scalars(select(Review).where(Review.user_id == user.id).order_by(Review.created_at.desc()))
-    return [{"id": r.id, "source": r.source, "score": r.score, "created_at": r.created_at.isoformat()} for r in rows]
+    return [{"id": r.id, "source": r.source, "score": r.score, "issue_count": len(r.issues),
+             "created_at": r.created_at.isoformat()} for r in rows]
 
 
 @router.get("/reviews/{review_id}")

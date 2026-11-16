@@ -14,6 +14,7 @@ import secrets
 import shutil
 import signal
 import socket
+import subprocess
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -64,10 +65,30 @@ class Server:
 SERVERS: dict[str, Server] = {}
 
 
+_docker_probe: tuple[float, bool] = (0.0, False)  # (when, daemon answered)
+
+
+def _docker_up() -> bool:
+    """Is the Docker daemon answering? Cached for a minute: the CLI is often installed with the daemon stopped."""
+    global _docker_probe
+    if time.monotonic() - _docker_probe[0] > 60:
+        try:
+            up = subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"], check=False, capture_output=True,
+                                timeout=5).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            up = False
+        _docker_probe = (time.monotonic(), up)
+    return _docker_probe[1]
+
+
 def backend() -> str:
     mode = settings().sandbox
     if mode == "docker" and not shutil.which("docker"):
         raise SandboxError("the Docker sandbox is configured but Docker is not installed")
+    if mode == "docker" and not _docker_up():
+        if not shutil.which("sandbox-exec"):
+            raise SandboxError("the Docker sandbox is configured but Docker is not running; start Docker")
+        mode = "seatbelt"  # Docker Desktop is stopped on this Mac: the built-in macOS sandbox still isolates the code
     if mode == "seatbelt" and not shutil.which("sandbox-exec"):
         raise SandboxError("the seatbelt sandbox needs macOS sandbox-exec")
     if mode not in ("docker", "seatbelt"):
@@ -96,7 +117,7 @@ def _env(work: Path, port: int = 0) -> dict[str, str]:
     """A clean environment: no server secrets leak into user code; caches and temp files stay in the workspace."""
     for sub in ("home", "tmp"):
         (work / ".vox" / sub).mkdir(parents=True, exist_ok=True)
-    if settings().sandbox == "docker":
+    if backend() == "docker":
         # The host process is only the docker CLI: it needs the host PATH and HOME (for its config and context)
         # but no app secrets; the container gets its own environment through -e flags.
         return {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT")}
@@ -128,7 +149,7 @@ def _command(work: Path, command: str, name: str = "", port: int = 0) -> list[st
 
 
 def _container_name() -> str:
-    return "vox-" + secrets.token_hex(8) if settings().sandbox == "docker" else ""
+    return "vox-" + secrets.token_hex(8) if backend() == "docker" else ""
 
 
 async def _kill(proc: asyncio.subprocess.Process, container: str = "") -> None:

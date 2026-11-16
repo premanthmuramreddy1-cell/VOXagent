@@ -304,3 +304,24 @@ def test_a_site_with_no_home_page_does_not_count_as_loading(tmp_path):
         assert asyncio.run(run_tools._responds(server))[0]
     finally:
         httpd.shutdown()
+
+
+@pytest.mark.skipif(not shutil.which("sandbox-exec"), reason="needs macOS sandbox-exec")
+def test_docker_configured_but_stopped_falls_back_to_seatbelt(monkeypatch):
+    monkeypatch.setattr(settings(), "sandbox", "docker")
+    monkeypatch.setattr(sandbox.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(sandbox, "_docker_up", lambda: False)
+    assert sandbox.backend() == "seatbelt" and sandbox._container_name() == ""
+    monkeypatch.setattr(sandbox, "_docker_up", lambda: True)
+    assert sandbox.backend() == "docker"
+
+
+def test_preview_picks_how_to_start_a_project(tmp_path):
+    with pytest.raises(wsp.WorkspaceError):
+        run_tools.default_run(tmp_path)
+    (tmp_path / "index.html").write_text("<h1>cafe</h1>")
+    assert run_tools.default_run(tmp_path) == "python3 -m http.server $PORT --bind 0.0.0.0"
+    (tmp_path / "app.py").write_text("")
+    assert run_tools.default_run(tmp_path) == "python3 app.py"
+    (tmp_path / "package.json").write_text("{}")
+    assert run_tools.default_run(tmp_path) == "npm start"

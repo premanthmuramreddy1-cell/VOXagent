@@ -31,13 +31,13 @@ def test_agent_restates_then_answers_plain_question():
 
 def test_agent_runs_planned_skill_and_ticks_checklist():
     echo = EchoSkill()
-    llm = FakeLLM(plan([("Echo it", "echo"), ("Report back", "")]), call(text="hi"), "I echoed hi.")
+    llm = FakeLLM(plan([("Echo it", "echo"), ("Echo again", "echo")]), call(text="hi"), "I echoed hi.")
     rec = Recorder()
     answer, final_plan = run(Agent([llm], {"echo": echo}), rec)
     assert answer == "I echoed hi." and echo.runs == 1
     assert rec.types() == [
-        "agent.restate", "plan.created", "tool.started", "tool.finished", "plan.step",
-        "answer.delta", "answer.delta", "plan.step",
+        "agent.restate", "plan.created", "tool.started", "tool.finished", "plan.step", "plan.step",
+        "answer.delta", "answer.delta",
     ]
     assert all(step["done"] for step in final_plan["steps"])
     assert llm.calls[1]["tools"][0]["function"]["name"] == "echo"
@@ -51,6 +51,13 @@ def test_agent_keeps_tool_call_id_and_signature_in_history():
     run(Agent([llm], {"echo": EchoSkill()}), Recorder())
     sent = next(m for m in llm.calls[2]["messages"] if m.get("tool_calls"))["tool_calls"][0]
     assert sent["id"] == "a" and sent["extra_content"] == meta["extra_content"]
+
+
+def test_talk_only_plan_steps_are_never_shown_as_done_work():
+    llm = FakeLLM(plan([("Acknowledge the request", ""), ("Explain that I cannot browse", "")]), "Hello.")
+    rec = Recorder()
+    _, final_plan = run(Agent([llm], {"echo": EchoSkill()}), rec)
+    assert final_plan["steps"] == [] and "plan.created" not in rec.types() and "plan.step" not in rec.types()
 
 
 def test_agent_only_offers_skills_the_plan_asked_for():
@@ -327,6 +334,79 @@ def test_a_shared_link_is_opened_before_the_model_answers():
         text="how many stations does this have? https://en.wikipedia.org/wiki/Kochi_Metro.")
     assert Fetch.opened == ["https://en.wikipedia.org/wiki/Kochi_Metro"]  # trailing full stop is not the link
     assert "25 stations, opened 2017" in llm.calls[1]["messages"][0]["content"]
+
+
+def test_a_form_link_goes_to_the_form_tool_unread():
+    from pydantic import BaseModel
+
+    from app.skills import SkillResult
+
+    class Url(BaseModel):
+        url: str
+
+    class Tool:
+        input_schema, permission = Url, Permission.READ
+        opened: list[str] = []
+
+        def __init__(self, name, description):
+            self.name, self.description = name, description
+
+        async def run(self, args, ctx):
+            Tool.opened.append(self.name)
+            return SkillResult("I answered 2 of 2 question(s).")
+
+    skills = {"web_fetch": Tool("web_fetch", "Open a page."),
+              "fill_form": Tool("fill_form", "Fill any web form or quiz: 'fill this form', 'answer this quiz'.")}
+    llm = FakeLLM(plan(), call("fill_form", url="https://forms.example/q"), "Done.")
+    run(Agent([llm], skills), Recorder(), text="answer the questions in this quiz https://forms.example/q")
+    assert Tool.opened == ["fill_form"]  # read as plain text, a scripted form has no questions to show the model
+    assert "fill_form" in llm.calls[1]["messages"][0]["content"]  # the model is told the tool fits
+
+
+def test_a_form_service_link_is_filled_even_when_the_model_would_refuse():
+    from pydantic import BaseModel
+
+    from app.skills import SkillResult
+
+    class Url(BaseModel):
+        url: str
+
+    class NoArgs(BaseModel):
+        pass
+
+    ran: list[tuple[str, dict]] = []
+
+    class Fill:
+        name, description, input_schema, permission = "fill_form", "Fill a form.", Url, Permission.CHANGE
+
+        async def run(self, args, ctx):
+            ran.append(("fill_form", args.model_dump()))
+            return SkillResult("I answered 2 of 2 question(s).", then="submit_form")
+
+    class Submit:
+        name, description, input_schema, permission = "submit_form", "Submit it.", NoArgs, Permission.CRITICAL
+
+        async def run(self, args, ctx):
+            ran.append(("submit_form", {}))
+            return SkillResult("Submitted.")
+
+    llm = FakeLLM(plan())  # the model itself never calls a tool
+    answer, _ = run(Agent([llm], {"fill_form": Fill(), "submit_form": Submit()}), Recorder(decision="yes"),
+                    text="fill this form https://forms.cloud.microsoft/Pages/ResponsePage.aspx?id=abc.")
+    assert ran == [("fill_form", {"url": "https://forms.cloud.microsoft/Pages/ResponsePage.aspx?id=abc"}),
+                   ("submit_form", {})]
+    assert answer == "I answered 2 of 2 question(s).\nSubmitted."  # read out as the tools reported it
+    assert len(llm.calls) == 1  # only the planner: the model never rewords what happened to the form
+
+
+def test_submit_it_with_a_filled_form_waiting_offers_only_submit(monkeypatch):
+    from app import forms
+
+    monkeypatch.setitem(forms.SESSIONS, "u1", object())  # a form filled earlier is waiting for the user's yes
+    llm = FakeLLM(plan(), "OK.")
+    skills = {"submit_form": EchoSkill("submit_form"), "screen_control": EchoSkill("screen_control")}
+    run(Agent([llm], skills), Recorder(), text="ok submit it")
+    assert [t["function"]["name"] for t in llm.calls[1]["tools"]] == ["submit_form"]
 
 
 def test_an_echoed_data_tag_never_reaches_the_user():

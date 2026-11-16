@@ -131,18 +131,43 @@ class RunTests(Tool):
 
 
 class ServerArgs(BaseModel):
-    command: str = Field(description="Command that starts the web server, e.g. 'npm run dev' or 'python app.py'.")
+    command: str = Field(default="", description="Command that starts the web server, e.g. 'npm start'. Leave empty "
+                                                  "to start the project the usual way.")
     port: int = Field(default=0, ge=0, le=65535, description="Port the app listens on; 0 picks one and sets $PORT.")
+
+
+def default_run(base: Any) -> str:
+    """How to start a project nobody gave a command for: npm start, a Python app, or a plain static site."""
+    if (base / "package.json").is_file():
+        return "npm start"
+    for main in ("app.py", "main.py", "server.py"):
+        if (base / main).is_file():
+            return f"{'.venv/bin/python' if (base / '.venv').is_dir() else 'python3'} {main}"
+    if (base / "index.html").is_file():
+        return "python3 -m http.server $PORT --bind 0.0.0.0"
+    raise wsp.WorkspaceError("this project has no website to preview yet; ask me to build one first")
 
 
 class StartServer(Tool):
     name, input_schema, permission = "start_server", ServerArgs, Permission.CHANGE
-    description = "Start the project's web app in the sandbox and give back a preview URL the user can open and share."
+    description = ("Show the live preview of the website or app in this project and give its link: 'show preview', "
+                   "'where is the link', 'open the site', 'run the app'. Reuses the running preview when there is one.")
 
     async def act(self, args, ctx, db, space):
-        server = await sandbox.start_server(wsp.root(space), space.id, ctx.user_id, args.command, args.port)
+        running = [s for s in sandbox.SERVERS.values() if s.workspace_id == space.id and s.running]
+        if running and not args.command:
+            server = running[-1]
+        else:
+            server = await sandbox.start_server(wsp.root(space), space.id, ctx.user_id,
+                                                args.command or default_run(wsp.root(space)), args.port)
+        ok, note = await _responds(server)
+        if not ok:
+            log = sandbox.read_log(server)[-600:]
+            await sandbox.stop_server(server.id)
+            return SkillResult(f"The preview did not load ({note}). Say fix it and I will repair it. Log: {log}",
+                               {"error": note})
         await ctx.emit("server.started", id=server.id, url=server.url, port=server.port, command=server.command)
-        return SkillResult(f"The app is starting on port {server.port}. Preview: {server.url}",
+        return SkillResult(f"The site is running and the page loads. Preview: {server.url}",
                            {"server_id": server.id, "url": server.url}, final=True)  # a model drops the path
 
 
@@ -378,7 +403,7 @@ async def _responds(server: sandbox.Server, path: str = "/") -> tuple[bool, str]
 
 class CreateProject(Tool):
     name, input_schema, permission = "create_project", ProjectArgs, Permission.CHANGE
-    description = ("Build a website, app, API or script from one request, A to Z ('build a website for my coffee "
+    description = ("Build a website, app, API or script from one request, A to Z ('make a portfolio website', 'build a website for my coffee "
                    "shop'). Starts right away from what the user said; never asks for details first. Plans the "
                    "files, writes each one, installs dependencies, runs it, checks the page really loads, and fixes "
                    "errors until it works; web projects get a live preview link.")
