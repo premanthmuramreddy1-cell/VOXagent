@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     sandbox_output_chars: int = 20_000
     fix_attempts: int = 3
     tunnel: str = ""  # "cloudflared" exposes previews on a public trycloudflare.com URL
+    # Driving this Mac's screen (screen_control): off unless the owner turns it on; admin accounts only.
+    screen_control: bool = False
+    screen_steps: int = 12
 
     # Web access. search: duckduckgo (no key) or searxng:<base url>.
     web_search: str = "duckduckgo"

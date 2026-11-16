@@ -157,3 +157,36 @@ def test_placing_an_order_waits_for_the_next_turn_after_the_preview():
     _, final_plan = asyncio.run(Agent([llm], skills).run(Recorder().turn()))
     assert [s["skill"] for s in final_plan["steps"]] == ["order_from_link"]
     assert [t["function"]["name"] for t in llm.calls[1]["tools"]] == ["order_from_link"]
+
+
+@needs_browser
+def test_usual_order_is_saved_then_reordered_in_a_real_browser_and_waits_for_yes(cafe):
+    from unittest.mock import AsyncMock
+
+    from app.crypto import save_secret
+    from app.db import SessionLocal, User, new_id
+    from app.skills import RunContext
+    from app.skills.order_tools import OrderUsual, SaveUsual
+
+    base, hits, _ = cafe
+    with SessionLocal() as db:
+        row = User(email=f"u{new_id()}@example.com", password_hash="x")
+        db.add(row)
+        db.commit()
+        uid = row.id
+        save_secret(db, uid, "profile", PROFILE)
+    seen: list[dict] = []
+    ctx = RunContext(uid, "s", "", [], AsyncMock(), scripted_model(seen))
+
+    async def flow():
+        await SaveUsual().run(SaveUsual.input_schema(name="coffee", request="1 iced latte",
+                                                     url=f"{base}/menu.html"), ctx)
+        prepared = await OrderUsual().run(OrderUsual.input_schema(name="my usual coffee"), ctx)
+        placed_before_yes = any(h.startswith("/done.html") for h in hits)
+        placed = await ConfirmOrder().run(ConfirmOrder.input_schema(), ctx)
+        return prepared, placed_before_yes, placed
+
+    prepared, placed_before_yes, placed = run(flow())
+    assert prepared.data["status"] == "ready" and "say yes" in prepared.summary and "₹ 340" in prepared.summary
+    assert not placed_before_yes
+    assert "order is placed" in placed.summary and any(h.startswith("/done.html") for h in hits)

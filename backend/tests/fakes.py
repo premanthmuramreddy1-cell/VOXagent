@@ -96,4 +96,5 @@ class Recorder:
         return [t for t, _ in self.events]
 
     def turn(self, text="please do it", user_id="u1", **kw):
-        return Turn(user_id, "s1", text, self.emit, self.confirm, kw.pop("upload_ids", []), [], **kw)
+        return Turn(user_id, "s1", text, self.emit, self.confirm, kw.pop("upload_ids", []), kw.pop("history", []),
+                    **kw)

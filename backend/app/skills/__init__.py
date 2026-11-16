@@ -26,6 +26,7 @@ class Permission(StrEnum):
 class SkillResult:
     summary: str  # short text handed back to the LLM and spoken
     data: dict[str, Any] = field(default_factory=dict)  # shown in the client
+    final: bool = False  # spoken as written: the model may not reword or pad it
 
 
 @dataclass

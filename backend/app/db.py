@@ -174,6 +174,46 @@ class Reminder(Base):
     created_at: Mapped[datetime] = mapped_column(default=now)
 
 
+class Payment(Base):
+    """A subscription or bill the user pays on a cycle. VoxAgent only tracks and nudges; it never pays."""
+    __tablename__ = "payments"
+    id: Mapped[str] = _pk()
+    user_id: Mapped[str] = _fk("users.id")
+    kind: Mapped[str] = mapped_column(default="subscription")  # subscription | bill
+    name: Mapped[str]
+    amount: Mapped[float] = mapped_column(default=0)
+    currency: Mapped[str] = mapped_column(default="")
+    cycle: Mapped[str] = mapped_column(default="month")  # week | month | year
+    next_due: Mapped[str] = mapped_column(default="")  # local date, YYYY-MM-DD
+    day: Mapped[int] = mapped_column(default=0)  # day of month it falls on, so Jan 31 -> Feb 28 -> Mar 31
+    remind_days: Mapped[int] = mapped_column(default=2)
+    autopay: Mapped[bool] = mapped_column(default=False)
+    last_paid: Mapped[str] = mapped_column(default="")
+    nudged: Mapped[str] = mapped_column(default="")  # "<due>:<days-before>" of the last nudge, so each fires once
+
+
+class Habit(Base):
+    """A daily habit: a target count ('8 glasses of water') and/or fixed times ('vitamin at 09:00 and 21:00')."""
+    __tablename__ = "habits"
+    id: Mapped[str] = _pk()
+    user_id: Mapped[str] = _fk("users.id")
+    name: Mapped[str]
+    target: Mapped[int] = mapped_column(default=1)
+    unit: Mapped[str] = mapped_column(default="time")
+    times: Mapped[list[Any]] = mapped_column(default=list)  # ["09:00", "21:00"] local
+    log: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"YYYY-MM-DD": count}
+    nudged: Mapped[dict[str, Any]] = mapped_column(default=dict)  # {"<day>:<slot>": true}
+
+
+class ListItem(Base):
+    __tablename__ = "list_items"
+    id: Mapped[str] = _pk()
+    user_id: Mapped[str] = _fk("users.id")
+    list: Mapped[str] = mapped_column(default="groceries", index=True)
+    text: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(default=now)
+
+
 class Secret(Base):
     """Encrypted per-user credentials (OAuth tokens, GitHub token, form profile)."""
     __tablename__ = "secrets"

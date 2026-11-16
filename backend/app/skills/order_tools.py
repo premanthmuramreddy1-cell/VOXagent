@@ -5,10 +5,11 @@ an explicit yes. Nothing is ever paid with typed card details: those pages are h
 """
 
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 
 from app import orders
 from app.crypto import load_secret
-from app.db import SessionLocal
+from app.db import Memory, SessionLocal, now
 from app.skills import Permission, RunContext, SkillResult
 
 STOPPED = {
@@ -78,4 +79,58 @@ class CancelOrder:
         return SkillResult("Dropped the order; nothing was placed." if dropped else "No order was waiting.", {})
 
 
-skills = [OrderFromLink(), ConfirmOrder(), CancelOrder()]
+# A usual is a memory ("Usual coffee: <request> | <url>"), so the agent also sees it in every turn's context.
+def _usuals(db, user_id: str) -> dict[str, Memory]:
+    rows = db.scalars(select(Memory).where(Memory.user_id == user_id, Memory.kind == "usual"))
+    return {m.text.split(":", 1)[0].removeprefix("Usual ").strip().lower(): m for m in rows}
+
+
+class SaveUsualArgs(BaseModel):
+    name: str = Field(description="What the usual is called, e.g. 'coffee', 'lunch', 'milk'.")
+    request: str = Field(default="", description="Exactly what to order. Empty: use the order just prepared.")
+    url: str = Field(default="", description="The store or menu link. Empty: use the order just prepared.")
+
+
+class SaveUsual:
+    name, input_schema, permission = "save_usual", SaveUsualArgs, Permission.READ
+    description = ("Remember a usual order: 'my usual coffee is a cold coffee from <link>', or 'save this as my "
+                   "usual' after an order was prepared. Saving the same name again replaces it.")
+
+    async def run(self, args: SaveUsualArgs, ctx: RunContext) -> SkillResult:
+        last = orders.ORDERS.get(ctx.user_id)
+        request = args.request or (last.request if last else "")
+        url = args.url or (last.url if last else "")
+        if not (request and url):
+            return SkillResult("I need the link and what to order to save a usual. Share the store link.", {})
+        key = args.name.strip().lower()
+        with SessionLocal() as db:
+            row = _usuals(db, ctx.user_id).get(key) or Memory(user_id=ctx.user_id, kind="usual", text="")
+            row.text, row.updated_at = f"Usual {key}: {request} | {url}", now()
+            db.add(row)
+            db.commit()
+        return SkillResult(f"Saved your usual {key}: {request}. Say 'order my usual {key}' any time.",
+                           {"name": key, "request": request, "url": url})
+
+
+class OrderUsualArgs(BaseModel):
+    name: str = Field(description="Which usual to order, e.g. 'coffee'.")
+
+
+class OrderUsual:
+    name, input_schema, permission = "order_usual", OrderUsualArgs, Permission.CHANGE
+    description = ("Order a saved usual ('order my usual coffee', 'reorder milk'): prepares it like "
+                   "order_from_link and stops before the final order button for a yes.")
+
+    async def run(self, args: OrderUsualArgs, ctx: RunContext) -> SkillResult:
+        with SessionLocal() as db:
+            found = _usuals(db, ctx.user_id)
+        key = args.name.strip().lower()
+        row = found.get(key) or next((m for k, m in found.items() if key in k or k in key), None)
+        if row is None:
+            saved = ", ".join(found) or "none yet"
+            return SkillResult(f"You have no usual called {key}. Saved usuals: {saved}.", {})
+        request, _, url = row.text.split(":", 1)[1].rpartition(" | ")
+        return await OrderFromLink().run(OrderArgs(url=url.strip(), request=request.strip()), ctx)
+
+
+skills = [OrderFromLink(), ConfirmOrder(), CancelOrder(), SaveUsual(), OrderUsual()]

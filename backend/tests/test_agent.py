@@ -148,3 +148,56 @@ def test_registry_discovers_skills_from_the_skills_folder():
 )
 def test_spoken_code_terms(spoken, written):
     assert normalize(spoken) == written
+
+
+@pytest.mark.parametrize(("said", "read", "accepted"), [
+    ("crete a websit for my cofee shop", "create a website for my coffee shop", True),
+    ("fix teh bugg in main.py", "fix the bug in main.py", True),
+    ("make a website", "make a website", False),  # nothing to fix
+    ("order pizza", "order a large pepperoni pizza from dominos", False),  # adds meaning: a guess, not a fix
+    ("delete my files", "keep my files", False),  # changes meaning
+    ("hello", "", False),
+])
+def test_spelling_fixes_are_accepted_but_guesses_are_not(said, read, accepted):
+    from app.agent import is_spelling_fix
+    assert is_spelling_fix(said, read) is accepted
+
+
+def test_misspelled_request_is_read_as_fixed_and_shown_to_the_user():
+    understood = {**plan(restatement="Make a coffee shop site"), "understood": "make a website for my coffee shop"}
+    llm = FakeLLM(understood, "On it.")
+    rec = Recorder()
+    run(Agent([llm], {}), rec, text="mak a websit for my cofee shop")
+    assert ("agent.understood", {"original": "mak a websit for my cofee shop",
+                                 "text": "make a website for my coffee shop"}) in rec.events
+    assert llm.calls[1]["messages"][-1]["content"].endswith("(Read as, with spelling fixed: make a website for my "
+                                                             "coffee shop)")
+
+
+def test_planner_guess_beyond_spelling_is_ignored():
+    guessed = {**plan(), "understood": "order a large pepperoni pizza from dominos"}
+    llm = FakeLLM(guessed, "Sure.")
+    rec = Recorder()
+    run(Agent([llm], {}), rec, text="order pizza")
+    assert "agent.understood" not in rec.types()
+    assert llm.calls[1]["messages"][-1]["content"] == "order pizza"
+
+
+def test_planner_sees_recent_conversation_to_resolve_references():
+    llm = FakeLLM(plan(), "Again.")
+    history = [{"role": "user", "content": "make the header blue"}, {"role": "assistant", "content": "Done."}]
+    run(Agent([llm], {}), Recorder(), text="do that again", history=history)
+    assert [m["content"] for m in llm.calls[0]["messages"][1:]] == ["make the header blue", "Done.", "do that again"]
+
+
+def test_final_skill_result_is_spoken_as_written_without_another_model_call():
+    class Briefing(EchoSkill):
+        async def run(self, args, ctx):
+            from app.skills import SkillResult
+            return SkillResult("Due soon: Rent today (₹15,000).", final=True)
+
+    llm = FakeLLM(plan([("Brief", "echo")]), call(text="x"), "7 am: drink water. 9 am: review finances.")
+    rec = Recorder()
+    answer, _ = run(Agent([llm], {"echo": Briefing()}), rec)
+    assert answer == "Due soon: Rent today (₹15,000)."  # no invented schedule
+    assert len(llm.calls) == 2  # planner + the tool-calling step only

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app import life
 from app import workspace as wsp
 from app.db import Memory, Note, Reminder, UserSetting, Workspace, now
 
@@ -137,4 +138,7 @@ def briefing(db: Session, user_id: str, events: list[dict] | None = None) -> str
     if events is not None:
         named = [f"{e['start'][11:16] or 'all day'} {e['title']}" for e in events]
         lines.append(f"{len(named)} calendar event(s): " + "; ".join(named) + "." if named else "No calendar events today.")
+    # bills, habits and lists: the rest of "plan my day"
+    lines += (life.payment_lines(db, user_id, today.date()) + life.habit_lines(db, user_id, today.date())
+              + life.list_lines(db, user_id))
     return " ".join(lines)

@@ -185,7 +185,9 @@ class CompleteReminder:
 
 class Briefing:
     name, input_schema, permission = "daily_briefing", Empty, Permission.READ
-    description = "Give a short spoken briefing of today's reminders and calendar events."
+    description = ("Plan my day: a short spoken briefing of today's reminders, calendar events, bills and renewals "
+                   "due soon, habit progress and what is on the user's lists. Relay it as given: do not invent "
+                   "times, tasks or a schedule that is not in it.")
 
     async def run(self, args: Empty, ctx: RunContext) -> SkillResult:
         from app import google
@@ -198,7 +200,7 @@ class Briefing:
             except google.GoogleError:
                 events = None  # calendar not connected: brief from reminders alone
             text = personal.briefing(db, ctx.user_id, events)
-        return SkillResult(text, {"briefing": text})
+        return SkillResult(text, {"briefing": text}, final=True)
 
 
 skills = [Remember(), Forget(), ListMemory(), UpdateProjectNotes(), SaveNote(), SearchNotes(), AddReminder(),

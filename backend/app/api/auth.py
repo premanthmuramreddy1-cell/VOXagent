@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.crypto import load_secret
-from app.db import (Activity, Base, BotLink, ChatSession, LinkCode, Memory, Message, Note, PendingChange,
+from app.db import (Activity, Base, BotLink, ChatSession, Habit, LinkCode, ListItem, Memory, Message, Note,
+                    Payment, PendingChange,
                     PushSubscription, RefreshToken, Reminder, Review, Secret, Upload, UsageEvent, User,
                     UserSetting, Workspace, get_db, now)
 from app.security import current_user, hash_password, make_access_token, rate_limit, sha256, verify_password
@@ -190,6 +191,9 @@ def export_me(user: User = Depends(current_user), db: Session = Depends(get_db))
         "memories": _rows(db, Memory, Memory.user_id == user.id),
         "notes": _rows(db, Note, Note.user_id == user.id),
         "reminders": _rows(db, Reminder, Reminder.user_id == user.id),
+        "payments": _rows(db, Payment, Payment.user_id == user.id),
+        "habits": _rows(db, Habit, Habit.user_id == user.id),
+        "lists": _rows(db, ListItem, ListItem.user_id == user.id),
         "workspaces": _rows(db, Workspace, Workspace.user_id == user.id),
         "form_profile": load_secret(db, user.id, "profile") or {},
         "connected": sorted(s.kind for s in db.scalars(select(Secret).where(Secret.user_id == user.id))),
@@ -203,7 +207,7 @@ def delete_me(user: User = Depends(current_user), db: Session = Depends(get_db))
     space_ids = select(Workspace.id).where(Workspace.user_id == user.id)
     db.execute(delete(PendingChange).where(PendingChange.workspace_id.in_(space_ids)))
     for model in (ChatSession, RefreshToken, Activity, Upload, Review, UsageEvent, Workspace, Memory, Note, Reminder,
-                  Secret, PushSubscription, BotLink, LinkCode, UserSetting):
+                  Payment, Habit, ListItem, Secret, PushSubscription, BotLink, LinkCode, UserSetting):
         db.execute(delete(model).where(model.user_id == user.id))
     db.execute(delete(User).where(User.id == user.id))
     db.commit()

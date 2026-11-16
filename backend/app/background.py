@@ -7,10 +7,10 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from app import forms, orders, personal, push, sandbox
+from app import forms, life, orders, personal, push, sandbox
 from app.bots import telegram_running
 from app.config import settings
-from app.db import SessionLocal, UserSetting
+from app.db import Habit, Payment, SessionLocal, UserSetting
 
 log = logging.getLogger("vox.jobs")
 
@@ -41,6 +41,20 @@ async def send_briefings(at: datetime | None = None) -> int:
     return sent
 
 
+async def send_life_nudges(at: datetime | None = None) -> int:
+    """Bills and renewals due soon (from 09:00 local), and habits the user is behind on (never at night)."""
+    sent = 0
+    with SessionLocal() as db:
+        users = set(db.scalars(select(Payment.user_id))) | set(db.scalars(select(Habit.user_id)))
+        for user_id in users:
+            local = (at or datetime.now()).astimezone(personal.zone(db, user_id)).replace(tzinfo=None)
+            notes = life.payment_nudges(db, user_id, local.date()) if 9 <= local.hour < 22 else []
+            for text in notes + life.habit_nudges(db, user_id, local):
+                await push.notify(user_id, "Heads up", text, "/#/me")
+                sent += 1
+    return sent
+
+
 async def _every(seconds: int, job) -> None:
     while True:
         try:
@@ -58,7 +72,8 @@ async def running(_app=None):
              asyncio.create_task(_every(120, forms.reap)),
              asyncio.create_task(_every(120, orders.reap)),
              asyncio.create_task(_every(20, deliver_reminders)),
-             asyncio.create_task(_every(300, send_briefings))]
+             asyncio.create_task(_every(300, send_briefings)),
+             asyncio.create_task(_every(300, send_life_nudges))]
     async with telegram_running():
         try:
             yield
