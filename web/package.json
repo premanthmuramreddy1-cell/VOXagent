@@ -9,7 +9,8 @@
     "lint": "oxlint",
     "check:shapes": "node scripts/shapes-check.ts",
     "preview": "vite preview",
-    "live": "vite build && vite preview --port 4173 --strictPort"
+    "live": "vite build && vite preview --port 4173 --strictPort",
+    "check:api": "node scripts/api-check.ts"
   },
   "dependencies": {
     "lucide-react": "^1.71.0",

@@ -473,14 +473,26 @@ export default function Chat() {
   const mic = useRef<Mic | null>(null)
   const speakRef = useRef(speak)
   const bottom = useRef<HTMLDivElement>(null)
-  speakRef.current = speak
+
+  useEffect(() => {
+    speakRef.current = speak
+  }, [speak])
+
+  /** Switch conversations: the old one's messages, pending yes/no and busy state go with it. */
+  function openSession(id: string) {
+    if (id === current) return
+    setItems([])
+    setConfirm(null)
+    setBusy(false)
+    setCurrent(id)
+  }
 
   useEffect(() => {
     api<Session[]>('/sessions')
       .then(async (list) => {
         const all = list.length ? list : [await post<Session>('/sessions')]
         setSessions(all)
-        setCurrent(all[0].id)
+        setCurrent(all[0].id) // first load: nothing to clear yet
       })
       .catch((e) => setError({ message: e.message }))
     player.current.onChange = setSpeaking
@@ -494,10 +506,10 @@ export default function Chat() {
 
   useEffect(() => {
     if (!current) return
-    setItems([])
-    setConfirm(null)
-    setBusy(false)
-    api(`/sessions/${current}/messages`).then((rows: any) => setItems(fromHistory(Array.isArray(rows) ? rows : []))).catch(() => {})
+    let live = true // a slow history reply for a session the user has left must not land in this one
+    api(`/sessions/${current}/messages`)
+      .then((rows: any) => live && setItems((list) => [...fromHistory(Array.isArray(rows) ? rows : []), ...list]))
+      .catch(() => {})
     const ws = new Socket(current, {
       onStatus: setOnline,
       onAudio: (wav) => speakRef.current && player.current.enqueue(wav),
@@ -519,9 +531,11 @@ export default function Chat() {
       },
     })
     socket.current = ws
+    const voice = player.current
     return () => {
+      live = false
       ws.close()
-      player.current.stop()
+      voice.stop()
     }
   }, [current])
 
@@ -594,7 +608,7 @@ export default function Chat() {
   async function toggleHandsFree() {
     const on = !handsFree
     const active = on ? await openMic() : mic.current
-    if (active) active.handsFree = on
+    active?.setHandsFree(on)
     if (!on) active?.stop()
     setHandsFree(on && !!active)
   }
@@ -656,7 +670,7 @@ export default function Chat() {
   async function createSession() {
     const created = await post<Session>('/sessions')
     setSessions((list) => [created, ...list])
-    setCurrent(created.id)
+    openSession(created.id)
   }
 
   const currentSession = sessions.find((s) => s.id === current)
@@ -693,7 +707,7 @@ export default function Chat() {
             return (
               <button
                 key={s.id}
-                onClick={() => setCurrent(s.id)}
+                onClick={() => openSession(s.id)}
                 className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left font-mono text-xs transition-colors ${
                   isActive
                     ? 'border border-line bg-raised font-semibold text-ink shadow-xs'

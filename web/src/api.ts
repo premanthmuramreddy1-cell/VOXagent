@@ -10,17 +10,25 @@ export type ServerEvent = { type: string; seq?: number; [key: string]: any }
 
 let token = ''
 
-/** Trade the refresh cookie for a new access token. Null means the user must log in. */
-export async function refresh(): Promise<User | null> {
-  try {
-    const response = await fetch('/auth/refresh', { method: 'POST' })
-    if (!response.ok) return null
-    const body = await response.json()
-    token = body.access_token
-    return body.user
-  } catch {
-    return null
-  }
+let refreshing: Promise<User | null> | null = null
+
+/** Trade the refresh cookie for a new access token. Null means the user must log in.
+ *  Refresh tokens work once, so parallel 401s share one request instead of racing and logging the user out. */
+export function refresh(): Promise<User | null> {
+  refreshing ??= (async () => {
+    try {
+      const response = await fetch('/auth/refresh', { method: 'POST' })
+      if (!response.ok) return null
+      const body = await response.json()
+      token = body.access_token
+      return body.user as User
+    } catch {
+      return null
+    } finally {
+      refreshing = null
+    }
+  })()
+  return refreshing
 }
 
 export async function api<T = any>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
@@ -111,16 +119,19 @@ export class Socket {
   private lastSeq = -1
   private delay = 500
   private closed = false
+  private queue: string[] = [] // text sent before the socket was ready; flushed once it is
   private sessionId: string
   private handlers: Handlers
 
   constructor(sessionId: string, handlers: Handlers) {
     this.sessionId = sessionId
     this.handlers = handlers
-    this.open()
+    void this.open()
   }
 
-  private open() {
+  private async open() {
+    if (this.closed) return
+    if (!token) await refresh() // a socket opened without a token is closed with 4401 and drops the first message
     if (this.closed) return
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
     const ws = new WebSocket(`${scheme}://${location.host}/ws/sessions/${this.sessionId}`)
@@ -135,6 +146,7 @@ export class Socket {
         // First connect: history comes from REST, so start at the server's position.
         if (this.lastSeq < 0) this.lastSeq = event.seq ?? 0
         else if ((event.seq ?? 0) > this.lastSeq) this.send({ type: 'resume', last_seq: this.lastSeq })
+        for (const queued of this.queue.splice(0)) ws.send(queued)
         return
       }
       if (event.seq) {
@@ -149,17 +161,24 @@ export class Socket {
       // Run async work in a detached promise so onclose itself returns void (not a Promise).
       void (async () => {
         if (close.code === 4401) await refresh() // the access token expired
-        setTimeout(() => this.open(), this.delay)
+        setTimeout(() => void this.open(), this.delay)
         this.delay = Math.min(this.delay * 2, 10_000)
       })()
     }
     this.ws = ws
   }
 
-  /** Returns false when offline, so the caller can tell the user nothing was sent. */
+  /** Text is queued while (re)connecting and sent once the server is ready. Returns false only for audio sent
+   *  while offline (live speech is useless later) or when the queue is full, so the caller can say nothing was sent. */
   send(message: object | ArrayBuffer): boolean {
-    if (this.ws?.readyState !== WebSocket.OPEN) return false
-    this.ws.send(message instanceof ArrayBuffer ? message : JSON.stringify(message))
+    const ready = this.ws?.readyState === WebSocket.OPEN
+    if (message instanceof ArrayBuffer) {
+      if (ready) this.ws!.send(message)
+      return ready
+    }
+    if (ready) this.ws!.send(JSON.stringify(message))
+    else if (this.queue.length < 20) this.queue.push(JSON.stringify(message))
+    else return false
     return true
   }
 

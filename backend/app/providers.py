@@ -396,19 +396,39 @@ async def first_ok(stage: str, candidates: Sequence[P], call: Callable[[P], Awai
 async def llm_stream(
     candidates: Sequence[LLM], messages: list[dict], tools: list[dict] | None = None, schema: dict | None = None
 ) -> AsyncIterator[LLMEvent]:
-    """Stream from the first LLM that works. Falls back only if nothing was emitted yet."""
+    """Stream from the first LLM that works. Falls back only if nothing was emitted yet.
+
+    A provider that is slow to start (cloud models have taken 8-46 s under load) gets llm_first_token_s before the
+    next one takes over; the last provider has no deadline, so a local model can still load cold.
+    """
     for provider in candidates:
         started = False
+        stream = provider.stream(messages, tools, schema).__aiter__()
         try:
-            async for event in provider.stream(messages, tools, schema):
-                started = True
+            try:
+                first = (await stream.__anext__() if provider is candidates[-1]
+                         else await asyncio.wait_for(stream.__anext__(), settings().llm_first_token_s))
+            except StopAsyncIteration:
+                return
+            started = True
+            yield first
+            async for event in stream:
                 yield event
             return
         except Exception as exc:
-            _failed("llm", provider, exc)
+            _failed("llm", provider, TimeoutError(f"no reply within {settings().llm_first_token_s:g} s")
+                    if isinstance(exc, TimeoutError) else exc)
+            await _close(stream)
             if started:
                 break
     raise ProviderError("all llm providers failed")
+
+
+async def _close(stream: Any) -> None:
+    try:
+        await stream.aclose()
+    except Exception as exc:  # a half-cancelled stream may fail to close; it is abandoned either way
+        log.debug("abandoned llm stream did not close cleanly: %s", exc)
 
 
 def _failed(stage: str, provider: Any, exc: Exception) -> None:

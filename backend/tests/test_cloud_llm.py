@@ -314,3 +314,28 @@ def test_ollama_drops_bare_json_that_is_not_a_tool_call(monkeypatch):
     tool = [{"type": "function", "function": {"name": "world_briefing", "parameters": {}}}]
     events = collect(OllamaLLM("llama3.2"), [{"role": "user", "content": "latest news about AI"}], tools=tool)
     assert "".join(e.text for e in events) == ""  # llama3.2 answered '{}' and the user saw it
+
+
+def test_a_provider_slow_to_start_hands_the_turn_to_the_next(monkeypatch):
+    from app import config
+    from app.providers import LLMEvent, llm_stream
+
+    monkeypatch.setattr(config.settings(), "llm_first_token_s", 0.05)
+
+    class Slow:
+        name = "cloud:slow"
+
+        async def stream(self, messages, tools=None, schema=None):
+            await asyncio.sleep(5)  # Gemini under load: 8-46 s before the first token
+            yield LLMEvent("too late", [], 0)
+
+    class Fast:
+        name = "ollama:fast"
+
+        async def stream(self, messages, tools=None, schema=None):
+            yield LLMEvent("here", [], 0)
+
+    async def go():
+        return "".join([e.text async for e in llm_stream([Slow(), Fast()], [])])
+
+    assert asyncio.run(asyncio.wait_for(go(), 2)) == "here"

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     stt: str = "whisper:small"
     tts: str = "say"
     ollama_url: str = "http://localhost:11434"
+    llm_first_token_s: float = 15  # a model silent this long hands the turn to the next one (voice needs fast replies)
 
     max_upload_bytes: int = 5_000_000
     max_review_files: int = 40

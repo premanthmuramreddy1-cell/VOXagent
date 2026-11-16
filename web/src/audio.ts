@@ -69,6 +69,10 @@ type MicHandlers = {
 export class Mic {
   recording = false
   handsFree = false
+
+  setHandsFree(on: boolean) {
+    this.handsFree = on
+  }
   private ctx?: AudioContext
   private stream?: MediaStream
   private preRoll: ArrayBuffer[] = []
