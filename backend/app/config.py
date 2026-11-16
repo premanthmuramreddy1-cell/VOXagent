@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     # seatbelt = macOS sandbox-exec profile (dev on a Mac without Docker); off = running code is disabled.
     sandbox: str = "docker"
     sandbox_image: str = "voxagent-sandbox:latest"
+    # When the API itself runs in a container: preview servers join this Docker network and are reached by name.
+    sandbox_network: str = ""
     sandbox_cpus: float = 1.0
     sandbox_memory_mb: int = 1024
     sandbox_timeout_s: int = 120

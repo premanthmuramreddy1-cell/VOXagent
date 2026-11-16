@@ -4,6 +4,7 @@ import json
 import pytest
 
 from app import providers as prov
+from app import web
 from app.api import ws as ws_module
 from app.config import settings
 from app.providers import LLMEvent
@@ -160,6 +161,25 @@ def test_barge_in_stops_the_agent(client, token, monkeypatch):
     sock.send_json({"type": "barge_in"})
     events, _ = collect(sock, stop="tts.stop")
     assert "answer.done" not in types(events)
+
+
+def test_shopping_turn_lists_real_links_without_ordering(client, token, fake, monkeypatch):
+    hits = [{"title": "MX Master 3S – $99.99", "url": "https://shop.example/mx", "snippet": "Ergonomic mouse"}]
+
+    async def fake_search(query, limit=6):
+        return hits
+
+    monkeypatch.setattr(web, "search", fake_search)
+    fake(plan([("Find the mouse", "shopping")]), call("shopping", query="ergonomic mouse"), "Here are the options.")
+    session_id, _ = open_session(client, token)
+    sock = connect(client, session_id, token)
+    sock.send_json({"type": "text.input", "text": "where can I buy an ergonomic mouse"})
+    events, _ = collect(sock)
+    assert not any(e["type"] == "confirm.request" for e in events)  # finding links commits to nothing
+    finished = next(e for e in events if e["type"] == "tool.finished")
+    assert finished["ok"] is True
+    assert finished["data"]["options"] == [{**hits[0], "price": "$99.99"}]
+    assert events[-1]["type"] == "turn.done"
 
 
 def test_change_skill_waits_for_apply(client, token, fake, monkeypatch):

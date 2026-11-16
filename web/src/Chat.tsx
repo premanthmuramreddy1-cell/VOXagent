@@ -35,8 +35,18 @@ type Extra =
   | { kind: 'server'; url: string; command: string }
   | { kind: 'email'; to: string[]; subject: string; body: string }
   | { kind: 'form'; url: string; screenshot: string; filled: { field: string }[]; missing: string[] }
+  | { kind: 'order'; status: string; note: string; url: string; steps: string[]; total: string; final_button: string; screenshot: string }
 type Item = {
   role: 'user' | 'assistant'; text: string; restate?: string; steps?: Step[]; tools?: Tool[]; live?: boolean; extras?: Extra[]
+}
+
+const ORDER_STATUS: Record<string, string> = {
+  ready: 'Ready, waiting for your yes',
+  placed: 'Order placed',
+  submitted: 'Final button clicked, no confirmation shown',
+  needs_payment: 'Needs your payment details: finish on the store',
+  blocked: 'Stopped',
+  stuck: 'Could not reach checkout',
 }
 
 const diffClass = (line: string) =>
@@ -81,6 +91,33 @@ function Extras({ extras }: { extras: Extra[] }) {
               <p className="font-semibold">{extra.subject}</p>
               <p className="mt-1 whitespace-pre-wrap text-ink">{extra.body}</p>
             </div>
+          )
+        }
+        if (extra.kind === 'order') {
+          const tone = extra.status === 'placed' ? 'text-ok' : extra.status === 'ready' ? 'text-accent' : 'text-muted'
+          return (
+            <figure key={i} className="overflow-hidden rounded-xl border border-line">
+              <img src={`data:image/png;base64,${extra.screenshot}`} alt={`Order page at ${extra.url}`} className="max-h-96 w-full object-cover object-top" />
+              <figcaption className="space-y-1 px-3 py-2 font-mono text-xs text-muted">
+                <p className={tone}>
+                  {ORDER_STATUS[extra.status] ?? extra.status}
+                  {extra.total ? ` · total ${extra.total}` : ''}
+                  {extra.status === 'ready' && extra.final_button ? ` · next: “${extra.final_button}”` : ''}
+                </p>
+                {extra.note && <p>{extra.note}</p>}
+                {extra.steps.length > 0 && (
+                  <details>
+                    <summary className="cursor-pointer">{extra.steps.length} step(s) taken</summary>
+                    <ol className="mt-1 list-decimal pl-5">{extra.steps.map((s, n) => <li key={n}>{s}</li>)}</ol>
+                  </details>
+                )}
+                {extra.status !== 'ready' && extra.status !== 'placed' && (
+                  <a href={extra.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-accent hover:underline">
+                    <ExternalLink className="h-3 w-3" /> Open the store
+                  </a>
+                )}
+              </figcaption>
+            </figure>
           )
         }
         return (
@@ -141,6 +178,7 @@ function apply(items: Item[], event: ServerEvent): Item[] {
     case 'server.started':
     case 'email.draft':
     case 'form.preview':
+    case 'order.preview':
     case 'terminal.output': {
       const item = draft()
       const extras = [...(item.extras ?? [])]
@@ -151,6 +189,7 @@ function apply(items: Item[], event: ServerEvent): Item[] {
       } else if (event.type === 'changes.proposed') extras.push({ kind: 'diff', changes: event.changes })
       else if (event.type === 'server.started') extras.push({ kind: 'server', url: event.url, command: event.command })
       else if (event.type === 'email.draft') extras.push({ kind: 'email', to: event.to, subject: event.subject, body: event.body })
+      else if (event.type === 'order.preview') extras.push({ kind: 'order', status: event.status, note: event.note, url: event.url, steps: event.steps, total: event.total, final_button: event.final_button, screenshot: event.screenshot })
       else extras.push({ kind: 'form', url: event.url, screenshot: event.screenshot, filled: event.filled, missing: event.missing })
       item.extras = extras
       break
@@ -435,7 +474,9 @@ export default function Chat() {
     }
   }, [current])
 
-  useEffect(() => bottom.current?.scrollIntoView({ block: 'end' }), [items, confirm])
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ block: 'end' })
+  }, [items, confirm])
 
   function send(message: string, uploads: string[]) {
     const ok = socket.current?.send({ type: 'text.input', text: message, upload_ids: uploads, speak })

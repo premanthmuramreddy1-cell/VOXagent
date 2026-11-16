@@ -50,7 +50,12 @@ A guided walkthrough of every phase is in [DEMO.md](DEMO.md).
 | Personal | `remember`, `forget`, `list_memory`, `update_project_notes`, `save_note`, `search_notes`, `add_reminder`, `list_reminders`, `complete_reminder`, `daily_briefing` | read / apply |
 | Accounts | `draft_email`, `send_email`, `create_event`, `github_open_pr`, `github_publish`, `deploy_project` | apply · **yes** |
 | Forms | `fill_form` (preview, pauses), `submit_form`, `cancel_form` | apply · **yes** |
+| Ordering | `order_from_link` (items, food and drinks, tools, subscriptions: walks to checkout, fills your details, stops at the final button with the total), `confirm_order`, `cancel_order` | apply · **yes** |
 | Your Mac | `system_control`, `doc_writer`, `shopping` | apply · yes |
+
+Ordering never types card numbers, CVV, passwords or OTPs; a checkout that needs them is handed back to you.
+The final "place order / pay / subscribe" button is detected in code and never clicked by the browsing step,
+and placing the order always happens on your next turn, after you have seen the preview and total.
 
 Edit tools only stage a diff. Nothing reaches disk until you accept it (per change in the Workspace tab, or say
 "apply"), and every accepted change is a git commit that "undo that" reverts. Sending, paying, submitting,
@@ -97,8 +102,10 @@ CI (`.github/workflows/ci.yml`) runs the same on every push. Sandbox tests run o
 ## Deploy
 
 - **Docker Compose** (`docker-compose.yml`): Postgres, the API (with the Docker sandbox) and the web app behind nginx.
-  The API mounts the host Docker socket to start sandbox containers; on a shared server use a dedicated sandbox
-  host or microVM service instead.
+  `VOX_WEB_PORT=8090 docker compose up --build` if 8080 is taken. Run it from the repo root: workspaces live in
+  `./data`, mounted at the same path inside the API so the host's Docker can mount them into sandboxes. Preview
+  servers share only the `voxagent_preview` network with the API, never Postgres. The API mounts the host Docker
+  socket (root-equivalent); on a shared server use a dedicated sandbox host or microVM service instead.
 - **Any container host**: build `backend/Dockerfile` and `web/Dockerfile`; set `VOX_DATABASE_URL` to Postgres
   (`postgresql+psycopg://…`, install with `uv sync --extra postgres`).
 - **Clients**: install the PWA from the browser; `clients/android` (Trusted Web Activity via Bubblewrap) and
@@ -125,6 +132,7 @@ CI (`.github/workflows/ci.yml`) runs the same on every push. Sandbox tests run o
 - The planner sees every tool; small local models choose better with fewer skills installed.
 - PDF review export uses the browser's print dialog.
 - Not run against real accounts here: Gmail, Calendar, GitHub writes, Stripe, Telegram, WhatsApp, Render and
-  Vercel deploys are tested against mocked APIs only. Docker Compose, the Docker sandbox and the Android build
-  were written but not built on the development machine (no Docker, no Android SDK). The desktop app builds
+  Vercel deploys are tested against mocked APIs only. Ordering is tested end to end in Chromium against a local
+  shop; real stores that need a login or card payment stop at that step. The Android build was not run (no
+  Android SDK). The desktop app builds
   (`npm run dist`) and launches unsigned; signing needs an Apple Developer certificate.

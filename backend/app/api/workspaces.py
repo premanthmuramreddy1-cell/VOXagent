@@ -299,7 +299,7 @@ async def preview_proxy(server_id: str, path: str, request: Request) -> Response
         raise HTTPException(404, "this preview has stopped")
     server.last_access = time.monotonic()
     headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_HEADERS | {"cookie", "authorization"}}
-    url = f"http://127.0.0.1:{server.port}/{path}"
+    url = f"http://{server.host}:{server.port}/{path}"
     try:
         async with httpx.AsyncClient(timeout=30) as http:
             upstream = await http.request(request.method, url, params=request.query_params, headers=headers,
@@ -321,7 +321,7 @@ async def preview_socket(websocket: WebSocket, server_id: str, path: str) -> Non
     server.last_access = time.monotonic()
     query = f"?{websocket.url.query}" if websocket.url.query else ""
     try:
-        async with websockets.connect(f"ws://127.0.0.1:{server.port}/{path}{query}", max_size=8_000_000) as upstream:
+        async with websockets.connect(f"ws://{server.host}:{server.port}/{path}{query}", max_size=8_000_000) as upstream:
 
             async def downstream() -> None:
                 async for message in upstream:

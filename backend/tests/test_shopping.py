@@ -1,110 +1,53 @@
-import json
-from unittest.mock import AsyncMock, patch
+import asyncio
+from unittest.mock import AsyncMock
 
-import pytest
-
+from app import web
 from app.skills import Permission, RunContext
-from app.skills.shopping import Args, generate_retailer_cart_url, skill
+from app.skills.shopping import ShoppingSkill, price_in
+
+HITS = [
+    {"title": "Keychron K2 – ₹7,499", "url": "https://shop.example/k2", "snippet": "Wireless mechanical keyboard"},
+    {"title": "Logitech MX Mechanical", "url": "https://store.example/mx", "snippet": "Now $149.99 with free shipping"},
+    {"title": "Keyboard buying guide", "url": "https://blog.example/guide", "snippet": "How to pick a keyboard"},
+]
 
 
-@pytest.fixture
-def mock_ctx():
-    ctx = RunContext(
-        user_id="u1",
-        session_id="s1",
-        user_text="buy me an ergonomic mouse",
-        upload_ids=[],
-        emit=AsyncMock(),
-        complete=AsyncMock(),
-    )
-    ctx.complete.return_value = json.dumps({
-        "title": "Logitech MX Master 3S",
-        "price": 99.99,
-        "currency": "USD",
-        "retailer": "Amazon",
-        "specs": "8K DPI sensor, Quiet clicks",
-        "rating": 4.8,
-        "thinking": ["Analyzed ergonomic requirements", "Selected MX Master 3S for high rating and precision"],
-        "comparison": "Beat out vertical mouse due to sensor fidelity",
-    })
-    return ctx
+def run(monkeypatch, hits, **args):
+    seen = {}
+
+    async def fake_search(query, limit=6):
+        seen["query"] = query
+        return hits
+
+    monkeypatch.setattr(web, "search", fake_search)
+    skill = ShoppingSkill()
+    ctx = RunContext("u", "s", "", [], AsyncMock(), AsyncMock(return_value=""))
+    return asyncio.run(skill.run(skill.input_schema(**args), ctx)), seen["query"]
 
 
-@pytest.mark.anyio
-async def test_shopping_prepares_cart_opens_browser_and_stops_before_checkout(mock_ctx):
-    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-        proc = AsyncMock()
-        proc.communicate.return_value = (b"", b"")
-        mock_exec.return_value = proc
-
-        res = await skill.run(Args(query="ergonomic mouse", quantity=2), mock_ctx)
-
-        assert "opened your checkout cart directly in your browser" in res.summary
-        assert res.data["status"] == "STOPPED_BEFORE_CHECKOUT"
-        assert res.data["item"] == "Logitech MX Master 3S"
-        assert res.data["quantity"] == 2
-        assert res.data["subtotal"] == 199.98
-        assert res.data["requires_human_payment"] is True
-        assert res.data["opened_in_browser"] is True
-        assert len(res.data["thinking"]) >= 2
-        assert "amazon.com" in res.data["checkout_url"]
-
-        # Verify browser launch command called
-        mock_exec.assert_called_once_with("open", res.data["checkout_url"])
-
-        # Verify event emitted to UI
-        mock_ctx.emit.assert_called_once_with(
-            "shopping.checkout_ready",
-            status="STOPPED_BEFORE_CHECKOUT",
-            item="Logitech MX Master 3S",
-            specs="8K DPI sensor, Quiet clicks",
-            unit_price=99.99,
-            quantity=2,
-            subtotal=199.98,
-            est_tax=16.00,
-            est_shipping=0.00,
-            total_estimated_cost=215.98,
-            retailer="Amazon",
-            checkout_url=res.data["checkout_url"],
-            requires_human_payment=True,
-            thinking=res.data["thinking"],
-            comparison="Beat out vertical mouse due to sensor fidelity",
-            opened_in_browser=True,
-        )
+def test_shopping_is_read_only_and_never_orders():
+    assert ShoppingSkill.permission is Permission.READ
 
 
-def test_shopping_permission_is_critical():
-    assert skill.permission == Permission.CRITICAL
+def test_prices_come_only_from_the_results_text():
+    assert price_in("Keychron K2 – ₹7,499") == ("₹7,499", 7499.0)
+    assert price_in("Now $149.99 with free shipping") == ("$149.99", 149.99)
+    assert price_in("How to pick a keyboard") == ("", None)
 
 
-def test_generate_retailer_cart_urls():
-    amazon_url = generate_retailer_cart_url("Amazon", "MacBook Air", "macbook")
-    assert "amazon.com/s?k=MacBook+Air" in amazon_url
-
-    bestbuy_url = generate_retailer_cart_url("BestBuy", "iPad", "ipad")
-    assert "bestbuy.com/site/searchpage.jsp?st=iPad" in bestbuy_url
-
-    google_url = generate_retailer_cart_url("other", "Shoes", "shoes")
-    assert "google.com/search?tbm=shop&q=Shoes" in google_url
+def test_shopping_lists_real_links_and_never_invents_a_price(monkeypatch):
+    result, query = run(monkeypatch, HITS, query="mechanical keyboard", retailer="Amazon")
+    assert query == "buy mechanical keyboard Amazon"
+    assert [o["url"] for o in result.data["options"]] == [h["url"] for h in HITS]
+    assert [o["price"] for o in result.data["options"]] == ["₹7,499", "$149.99", ""]
+    assert result.summary.endswith("(https://blog.example/guide)")  # no price for a result that shows none
 
 
-@pytest.mark.anyio
-async def test_shopping_fallback_when_llm_fails():
-    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
-        proc = AsyncMock()
-        proc.communicate.return_value = (b"", b"")
-        mock_exec.return_value = proc
+def test_budget_drops_priced_results_above_it_but_keeps_unpriced(monkeypatch):
+    result, _ = run(monkeypatch, HITS, query="mechanical keyboard", max_price=200)
+    assert [o["url"] for o in result.data["options"]] == ["https://store.example/mx", "https://blog.example/guide"]
 
-        ctx = RunContext(
-            user_id="u1",
-            session_id="s1",
-            user_text="buy headphones",
-            upload_ids=[],
-            emit=AsyncMock(),
-            complete=AsyncMock(side_effect=ValueError("bad json")),
-        )
-        res = await skill.run(Args(query="headphones", max_price=50.0), ctx)
-        assert res.data["status"] == "STOPPED_BEFORE_CHECKOUT"
-        assert res.data["unit_price"] == 50.0
-        assert "opened your checkout cart directly in your browser" in res.summary
-        assert len(res.data["thinking"]) > 0
+
+def test_no_results_says_so(monkeypatch):
+    result, _ = run(monkeypatch, [], query="unobtainium")
+    assert result.data["options"] == [] and "no store links" in result.summary

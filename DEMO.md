@@ -50,10 +50,13 @@ One script per phase. Start the backend and web app as in the README (on a Mac w
 1. Notes → Form-filling profile: add name, email, city. Try adding `password` — it is refused.
 2. Say: **"Fill the form at <public form URL>"** — a screenshot preview shows what was filled; it stops.
    **"Submit it"** needs an explicit yes.
-3. Telegram (with `VOX_TELEGRAM_TOKEN`): Account → Telegram → Get code, send `/link CODE` to the bot,
+3. Say: **"Order 2 iced lattes with oat milk from <menu link>"** (or a product, tool or subscription page): the chat
+   shows each step, a screenshot and the total, and stops before "Place order". Next turn, **"yes, place it"**.
+   A checkout that wants a card number, password or OTP is handed back to you.
+4. Telegram (with `VOX_TELEGRAM_TOKEN`): Account → Telegram → Get code, send `/link CODE` to the bot,
    then type or send a voice note. Confirmations arrive as Yes/No buttons.
-4. WhatsApp (Cloud API webhook at `/webhooks/whatsapp`): send `link CODE`, then talk to it the same way.
-5. Desktop: `cd clients/desktop && npm install && npm start`, press **Cmd/Ctrl+Shift+Space** from any app.
-6. Android: follow `clients/android/README.md`, or install the PWA from Chrome.
-7. Payments (with Stripe keys): Account → Upgrade → Stripe Checkout; the webhook flips the plan to Paid and
+5. WhatsApp (Cloud API webhook at `/webhooks/whatsapp`): send `link CODE`, then talk to it the same way.
+6. Desktop: `cd clients/desktop && npm install && npm start`, press **Cmd/Ctrl+Shift+Space** from any app.
+7. Android: follow `clients/android/README.md`, or install the PWA from Chrome.
+8. Payments (with Stripe keys): Account → Upgrade → Stripe Checkout; the webhook flips the plan to Paid and
    daily limits disappear.

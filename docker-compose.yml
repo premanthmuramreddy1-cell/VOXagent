@@ -1,4 +1,4 @@
-# Local stack: docker compose up --build   then open http://localhost:8080
+# Local stack: docker compose up --build   then open http://localhost:8080 (VOX_WEB_PORT=8090 to change it)
 # Needs backend/.env (copy backend/.env.example). Ollama runs on the host; the API reaches it via host.docker.internal.
 services:
   db:
@@ -18,11 +18,17 @@ services:
     environment:
       VOX_DATABASE_URL: postgresql+psycopg://vox:vox@db:5432/voxagent
       VOX_OLLAMA_URL: http://host.docker.internal:11434
-      VOX_PUBLIC_URL: http://localhost:8080
+      VOX_PUBLIC_URL: http://localhost:${VOX_WEB_PORT:-8080}
       VOX_SANDBOX: docker
+      VOX_SANDBOX_NETWORK: voxagent_preview
       VOX_COOKIE_SECURE: "false"
+      # Workspaces are bind-mounted into sandbox containers by the HOST's Docker, so the data folder must have
+      # the same absolute path inside this container and on the host.
+      VOX_DATA_DIR: ${PWD}/data
+    # The socket is root-owned; sandbox access through it is root-equivalent anyway (see the note below).
+    user: root
     volumes:
-      - data:/data
+      - ${PWD}/data:${PWD}/data
       # The API starts sandbox containers through the host's Docker. This socket is powerful: in production,
       # point VOX_SANDBOX at a dedicated sandbox host or microVM service instead of mounting it.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -30,10 +36,11 @@ services:
       db: {condition: service_healthy}
       sandbox-image: {condition: service_completed_successfully}
     extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [default, preview]
 
   web:
     build: ./web
-    ports: ["8080:8080"]
+    ports: ["${VOX_WEB_PORT:-8080}:8080"]
     depends_on: [api]
 
   sandbox-image:
@@ -43,4 +50,8 @@ services:
 
 volumes:
   db:
-  data:
+
+networks:
+  # Shared only by the API and preview servers: user code cannot reach Postgres on the default network.
+  preview:
+    name: voxagent_preview

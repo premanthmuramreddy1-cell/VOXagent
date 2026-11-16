@@ -7,7 +7,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from app import forms, personal, push, sandbox
+from app import forms, orders, personal, push, sandbox
 from app.bots import telegram_running
 from app.config import settings
 from app.db import SessionLocal, UserSetting
@@ -56,6 +56,7 @@ async def _every(seconds: int, job) -> None:
 async def running(_app=None):
     tasks = [asyncio.create_task(_every(60, sandbox.reap_idle)),
              asyncio.create_task(_every(120, forms.reap)),
+             asyncio.create_task(_every(120, orders.reap)),
              asyncio.create_task(_every(20, deliver_reminders)),
              asyncio.create_task(_every(300, send_briefings))]
     async with telegram_running():

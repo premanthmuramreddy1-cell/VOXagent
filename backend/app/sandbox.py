@@ -52,6 +52,7 @@ class Server:
     log: Path
     proc: asyncio.subprocess.Process | None = None
     container: str = ""
+    host: str = "127.0.0.1"  # where the API reaches the preview server
     tunnel: asyncio.subprocess.Process | None = None
     last_access: float = field(default_factory=time.monotonic)
 
@@ -93,6 +94,10 @@ def _env(work: Path, port: int = 0) -> dict[str, str]:
     """A clean environment: no server secrets leak into user code; caches and temp files stay in the workspace."""
     for sub in ("home", "tmp"):
         (work / ".vox" / sub).mkdir(parents=True, exist_ok=True)
+    if settings().sandbox == "docker":
+        # The host process is only the docker CLI: it needs the host PATH and HOME (for its config and context)
+        # but no app secrets; the container gets its own environment through -e flags.
+        return {k: v for k, v in os.environ.items() if k in ("PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT")}
     env = {
         "PATH": f"{work}/.venv/bin:{work}/node_modules/.bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
         "HOME": str(work / ".vox" / "home"), "TMPDIR": str(work / ".vox" / "tmp"), "LANG": "en_US.UTF-8",
@@ -108,21 +113,31 @@ def _env(work: Path, port: int = 0) -> dict[str, str]:
 def _command(work: Path, command: str, name: str = "", port: int = 0) -> list[str]:
     if backend() == "docker":
         cfg = settings()
-        cmd = ["docker", "run", "-d" if name else "--rm", "--init",
+        # Foreground with a name: the CLI lives as long as the container, and timeouts can remove it by name.
+        cmd = ["docker", "run", "--rm", "--init", "--name", name,
                f"--cpus={cfg.sandbox_cpus}", f"--memory={cfg.sandbox_memory_mb}m", "--pids-limit=256",
                "--cap-drop=ALL", "--security-opt=no-new-privileges", "-v", f"{work}:/work", "-w", "/work",
                "-e", "HOME=/work/.vox/home", "-e", "CI=1"]
-        if name:
-            cmd += ["--name", name, "-p", f"127.0.0.1:{port}:{port}", "-e", f"PORT={port}"]
+        if port:  # a preview server: on the shared network when the API is containerised, else a loopback port
+            net = ["--network", cfg.sandbox_network] if cfg.sandbox_network else ["-p", f"127.0.0.1:{port}:{port}"]
+            cmd += [*net, "-e", f"PORT={port}"]
         return [*cmd, cfg.sandbox_image, "sh", "-lc", command]
     return ["sandbox-exec", "-p", _seatbelt_profile(work), "/bin/sh", "-c", command]
 
 
-async def _kill(proc: asyncio.subprocess.Process) -> None:
+def _container_name() -> str:
+    return "vox-" + secrets.token_hex(8) if settings().sandbox == "docker" else ""
+
+
+async def _kill(proc: asyncio.subprocess.Process, container: str = "") -> None:
+    if container:  # killing the docker CLI does not stop its container
+        rm = await asyncio.create_subprocess_exec("docker", "rm", "-f", container,
+                                                  stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await rm.wait()
     if proc.returncode is None:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):  # group already gone (macOS reports EPERM for a reaped group)
             pass
         try:
             await asyncio.wait_for(proc.wait(), 10)
@@ -137,8 +152,9 @@ async def run(work: Path, command: str, on_output: Output | None = None, timeout
     cfg = settings()
     timeout = timeout or cfg.sandbox_timeout_s
     start, chunks, size = time.monotonic(), [], 0
+    name = _container_name()
     proc = await asyncio.create_subprocess_exec(
-        *_command(work, command), cwd=work, env=_env(work), start_new_session=True,
+        *_command(work, command, name), cwd=work, env=_env(work), start_new_session=True,
         stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
 
@@ -158,11 +174,11 @@ async def run(work: Path, command: str, on_output: Output | None = None, timeout
         await asyncio.wait_for(asyncio.gather(pump(), proc.wait()), timeout)
     except TimeoutError:
         timed_out = True
-        await _kill(proc)
+        await _kill(proc, name)
         if on_output:
             await on_output(f"\n[stopped after {timeout}s]\n")
     except asyncio.CancelledError:
-        await _kill(proc)
+        await _kill(proc, name)
         raise
     output = "".join(chunks) + ("\n[output truncated]" if size >= cfg.sandbox_output_chars else "")
     return RunResult(proc.returncode if proc.returncode is not None else -1, output, timed_out,
@@ -180,7 +196,7 @@ async def _public_url(server: Server) -> str:
     if settings().tunnel != "cloudflared" or not shutil.which("cloudflared"):
         return ""
     server.tunnel = await asyncio.create_subprocess_exec(
-        "cloudflared", "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{server.port}",
+        "cloudflared", "tunnel", "--no-autoupdate", "--url", f"http://{server.host}:{server.port}",
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, start_new_session=True,
     )
     assert server.tunnel.stderr
@@ -204,14 +220,15 @@ async def start_server(work: Path, workspace_id: str, user_id: str, command: str
     ident = secrets.token_urlsafe(12)
     log = work / ".vox" / f"server-{ident}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    name = "vox-" + "".join(c for c in ident.lower() if c.isalnum()) if backend() == "docker" else ""
+    backend()
+    name = _container_name()
     with log.open("wb") as handle:
         proc = await asyncio.create_subprocess_exec(
             *_command(work, command, name, port), cwd=work, env=_env(work, port), start_new_session=True,
             stdin=asyncio.subprocess.DEVNULL, stdout=handle, stderr=asyncio.subprocess.STDOUT,
         )
     server = Server(ident, workspace_id, user_id, command, port, f"{settings().public_url}/preview/{ident}/",
-                    log, proc, name)
+                    log, proc, name, name if name and settings().sandbox_network else "127.0.0.1")
     SERVERS[ident] = server
     server.url = await _public_url(server) or server.url
     return server
