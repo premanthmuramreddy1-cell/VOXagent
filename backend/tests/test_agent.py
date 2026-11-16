@@ -201,3 +201,20 @@ def test_final_skill_result_is_spoken_as_written_without_another_model_call():
     answer, _ = run(Agent([llm], {"echo": Briefing()}), rec)
     assert answer == "Due soon: Rent today (₹15,000)."  # no invented schedule
     assert len(llm.calls) == 2  # planner + the tool-calling step only
+
+
+def test_final_result_does_not_end_the_turn_while_another_planned_skill_is_waiting():
+    from app.skills import SkillResult
+
+    class Briefing(EchoSkill):
+        async def run(self, args, ctx):
+            self.runs += 1
+            return SkillResult("Due soon: Rent today.", final=True)
+
+    brief, echo = Briefing("brief"), EchoSkill()
+    llm = FakeLLM(plan([("Brief", "brief"), ("Echo", "echo")]), call("brief", text="x"), call(text="milk"),
+                  "Morning: a light breakfast. 4 pm: a short walk.")
+    answer, final_plan = run(Agent([llm], {"brief": brief, "echo": echo}), Recorder())
+    assert brief.runs == 1 and echo.runs == 1  # the second skill was not skipped
+    assert answer == "Due soon: Rent today. echoed milk"  # both tools' own words, no model padding after them
+    assert len(llm.calls) == 3 and all(s["done"] for s in final_plan["steps"])

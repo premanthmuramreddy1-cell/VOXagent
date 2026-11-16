@@ -24,6 +24,12 @@ def local_currency(tz: str) -> str:
 
 # ---------------------------------------------------------------- money
 
+def count(n: int, word: str) -> str:
+    """'1 item', '2 items', '1 glass', '8 glasses': spoken text never says 'item(s)'."""
+    plural = word + ("es" if word.endswith(("s", "x", "ch", "sh")) else "s")
+    return f"{n} {word if n == 1 else plural}"
+
+
 def money(amount: float, currency: str = "") -> str:
     text = f"{amount:,.2f}".removesuffix(".00")
     return f"{currency}{text}" if len(currency) <= 1 else f"{text} {currency}"
@@ -49,6 +55,8 @@ def first_due(today: date, day_of_month: int) -> date:
 def find_payment(db: Session, user_id: str, name: str) -> Payment | None:
     rows = list(db.scalars(select(Payment).where(Payment.user_id == user_id)))
     wanted = name.strip().lower()
+    if not wanted:
+        return None
     return (next((p for p in rows if p.name.lower() == wanted), None)
             or next((p for p in rows if wanted and (wanted in p.name.lower() or p.name.lower() in wanted)), None))
 
@@ -81,7 +89,7 @@ def payment_nudges(db: Session, user_id: str, today: date) -> list[str]:
             continue
         cost = f" ({money(p.amount, p.currency)})" if p.amount else ""
         if days < 0:
-            out.append(f"{p.name} was due {-days} day(s) ago and is not marked paid. Say 'I paid {p.name}' once it is.")
+            out.append(f"{p.name} was due {count(-days, 'day')} ago and is not marked paid. Say 'I paid {p.name}' once it is.")
         else:
             when = "today" if days == 0 else f"in {days} day{'s' * (days != 1)}"
             out.append(f"{p.name} {'renews' if p.kind == 'subscription' else 'is due'} {when}{cost}.")
@@ -120,6 +128,8 @@ def streak(habit: Habit, today: date) -> int:
 def find_habit(db: Session, user_id: str, name: str) -> Habit | None:
     rows = list(db.scalars(select(Habit).where(Habit.user_id == user_id)))
     wanted = name.strip().lower()
+    if not wanted:
+        return None
     return (next((h for h in rows if h.name.lower() == wanted), None)
             or next((h for h in rows if wanted and (wanted in h.name.lower() or h.name.lower() in wanted)), None))
 

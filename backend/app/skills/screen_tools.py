@@ -19,6 +19,8 @@ from app.skills import Permission, RunContext, SkillResult
 OFF_LIMITS = re.compile(r"\b(pay|payment|buy|purchase|checkout|send|email|message|post|tweet|delete|remove|erase|"
                         r"trash|password|passcode|otp|transfer|bank|wallet)\b", re.IGNORECASE)
 
+DATA_TAG = re.compile(r"</?\s*data\s*>", re.IGNORECASE)
+
 STEP_SCHEMA = {
     "type": "object",
     "properties": {
@@ -73,6 +75,7 @@ class ScreenControl:
             seen = await screen.see()
             listing = "\n".join(f"{i}. {it['role']}: {it['name']}" for i, it in enumerate(seen["items"]))
             view = f"App: {seen['app']}. Window: {seen['window']}.\n{listing or '(no readable controls)'}"
+            view = DATA_TAG.sub("[data]", view)  # screen text must not close the data fence and pose as instructions
             done = "\n".join(steps[-6:]) or "(nothing yet)"
             raw = await ctx.complete([
                 {"role": "system", "content": STEPPER.format(task=args.task)},

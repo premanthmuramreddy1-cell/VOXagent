@@ -63,3 +63,38 @@ def test_topic_asks_only_for_that_news_and_nothing_reachable_says_so(monkeypatch
     data = asyncio.run(world.briefing("UTC", topic="solar power"))
     assert urls == ["https://news.google.com/rss/search?q=solar%20power&hl=en-US&gl=US&ceid=US:en"]
     assert world.spoken(data) == "I couldn't reach the news or market sources right now."
+
+
+def test_topic_is_capped_and_the_cache_stays_small(monkeypatch):
+    urls = []
+
+    async def fake_get(url):
+        urls.append(url)
+        return RSS
+
+    monkeypatch.setattr(world, "_get", fake_get)
+    asyncio.run(world.briefing("UTC", topic="a" * 500))
+    assert "a" * 80 in urls[0] and "a" * 81 not in urls[0]
+
+    class Reply:
+        text = RSS
+
+        def raise_for_status(self):
+            pass
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            pass
+
+        async def get(self, url):
+            return Reply()
+
+    monkeypatch.undo()
+    monkeypatch.setattr(world.httpx, "AsyncClient", lambda **kw: Client())
+    monkeypatch.setattr(world, "_cache", {})
+    for i in range(200):
+        asyncio.run(world._get(f"https://news.example/{i}"))
+    assert len(world._cache) <= 64

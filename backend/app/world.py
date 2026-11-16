@@ -43,6 +43,8 @@ async def _get(url: str) -> str:
     async with httpx.AsyncClient(timeout=8, headers={"User-Agent": UA}, follow_redirects=True) as http:
         response = await http.get(url)
         response.raise_for_status()
+    if len(_cache) >= 64:  # topics come from users: keep the cache small
+        _cache.clear()
     _cache[url] = (time.monotonic(), response.text)
     return response.text
 
@@ -94,7 +96,7 @@ async def _settle(jobs: dict) -> dict:
 
 
 async def briefing(tz: str, focus: str = "all", topic: str = "") -> dict:
-    where = region(tz)
+    where, topic = region(tz), topic[:80]
     sections = {"topic": topic} if topic else {**SECTIONS, **({"india": "india"} if where == "IN" else {})}
     news = await _settle({k: headlines(q, where) for k, q in sections.items()}) if focus != "markets" else {}
     quotes = await _settle({s: quote_of(s) for s in market_order(where)}) if focus != "news" and not topic else {}

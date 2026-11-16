@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app import background, life, personal, push
+from sqlalchemy import select
+
 from app.db import Habit, Payment, SessionLocal, User, new_id
 from app.skills import RunContext
 from app.skills import life_tools as lt
@@ -66,7 +68,7 @@ def test_payment_nudges_fire_once_per_day_and_follow_up_unpaid_bills():
         assert life.payment_nudges(db, uid, date(2030, 1, 8)) == ["Electricity is due in 2 days (₹1,500)."]
         assert life.payment_nudges(db, uid, date(2030, 1, 8)) == []  # once a day, not every 5 minutes
         assert life.payment_nudges(db, uid, date(2030, 1, 10)) == ["Electricity is due today (₹1,500)."]
-        assert "was due 2 day(s) ago" in life.payment_nudges(db, uid, date(2030, 1, 12))[0]  # unpaid keeps asking
+        assert "was due 2 days ago" in life.payment_nudges(db, uid, date(2030, 1, 12))[0]  # unpaid keeps asking
         spotify = life.find_payment(db, uid, "spotify")
         assert spotify is not None and spotify.next_due == "2030-02-05"
 
@@ -177,3 +179,36 @@ def test_usual_order_saves_replaces_and_reorders_through_the_checkout_stop(monke
     assert seen == {"url": "https://shop.example/menu", "request": "2 cold coffee"}  # replaced, not duplicated
     assert "say yes" in result.summary  # still stops before the final button
     assert "no usual called tea" in run(ot.OrderUsual(), uid, name="tea").summary
+
+
+def test_bad_input_gets_a_question_instead_of_a_crash_or_junk_rows():
+    uid = user()
+    assert "couldn't read 'next friday'" in run(lt.TrackPayment(), uid, name="Rent", kind="bill",
+                                                 next_due="next friday").summary
+    assert "What should I call" in run(lt.TrackPayment(), uid, name="  ", kind="bill", day_of_month=5).summary
+    assert "not tracking" in run(lt.MarkPaid(), uid, name="").summary  # a blank name matches nothing
+    assert "couldn't read 25:99, noon" in run(lt.AddHabit(), uid, name="Vitamin", times=["25:99", "noon"]).summary
+    assert "Tell me what to add" in run(lt.AddToList(), uid, items=["", "  "]).summary
+    long = run(lt.AddToList(), uid, items=["x" * 5000])
+    assert len(long.data["added"][0]) == 120
+    with SessionLocal() as db:
+        assert not list(db.scalars(select(Payment).where(Payment.user_id == uid)))
+        assert not list(db.scalars(select(Habit).where(Habit.user_id == uid)))
+
+
+def test_usual_name_with_separators_is_saved_under_a_clean_name():
+    from app.skills import order_tools as ot
+    uid = user()
+    saved = run(ot.SaveUsual(), uid, name="Tea: green", request="1 tea | large", url=" https://shop.example/m ")
+    assert saved.data == {"name": "tea green", "request": "1 tea | large", "url": "https://shop.example/m"}
+    with SessionLocal() as db:
+        assert list(ot._usuals(db, uid)) == ["tea green"]
+    assert "What should I call" in run(ot.SaveUsual(), uid, name=" : ", request="x", url="https://a.example").summary
+
+
+def test_spoken_counts_use_real_plurals():
+    assert [life.count(1, "item"), life.count(2, "item"), life.count(8, "glass"), life.count(1, "day")] == [
+        "1 item", "2 items", "8 glasses", "1 day"]
+    uid = user()
+    assert "has 1 item." in run(lt.AddToList(), uid, items=["milk"]).summary
+    assert "8 glasses a day" in run(lt.AddHabit(), uid, name="Water", target=8, unit="glass").summary

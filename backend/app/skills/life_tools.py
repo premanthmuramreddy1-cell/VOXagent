@@ -1,5 +1,6 @@
 """Subscriptions and bills, daily habits and shopping lists (see app/life.py). Tracking only: nothing here pays."""
 
+import re
 from datetime import date
 from typing import Literal
 
@@ -11,6 +12,9 @@ from app.db import Habit, ListItem, Payment, SessionLocal
 from app.skills import Permission, RunContext, SkillResult
 
 
+CLOCK = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
+
+
 def _today(db, user_id: str) -> date:
     return personal.local_now(db, user_id).date()
 
@@ -20,7 +24,8 @@ def _today(db, user_id: str) -> date:
 class TrackArgs(BaseModel):
     name: str = Field(description="What is paid: 'Netflix', 'electricity bill', 'rent', 'phone EMI'.")
     kind: Literal["subscription", "bill"] = Field(
-        description="subscription: a service that renews by itself. bill: something the user pays each time.")
+        description="subscription: a service that renews by itself (Netflix, a gym plan). bill: something the user "
+                    "pays each time (rent, electricity, phone, EMI, school fees).")
     amount: float = Field(0, ge=0, description="Amount per cycle, 0 if not said.")
     currency: str = Field("", description="Symbol or code the user used (₹, $, EUR); empty if not said.")
     cycle: Literal["week", "month", "year"] = "month"
@@ -37,10 +42,15 @@ class TrackPayment:
                    "already tracked. Only tracks; never pays.")
 
     async def run(self, args: TrackArgs, ctx: RunContext) -> SkillResult:
+        if not args.name.strip():
+            return SkillResult("What should I call this payment?", {})
         with SessionLocal() as db:
             today = _today(db, ctx.user_id)
-            due = (date.fromisoformat(args.next_due) if args.next_due
-                   else life.first_due(today, args.day_of_month or today.day))
+            try:
+                due = (date.fromisoformat(args.next_due) if args.next_due
+                       else life.first_due(today, args.day_of_month or today.day))
+            except ValueError:
+                return SkillResult(f"I couldn't read {args.next_due!r} as a date. Which day is it due?", {})
             row = life.find_payment(db, ctx.user_id, args.name) or Payment(user_id=ctx.user_id, name=args.name.strip())
             row.kind, row.cycle, row.remind_days, row.autopay = args.kind, args.cycle, args.remind_days, args.autopay
             row.amount = args.amount or row.amount or 0
@@ -51,7 +61,7 @@ class TrackPayment:
             cost = f"{life.money(row.amount, row.currency)} a {row.cycle}, " if row.amount else ""
             verb = "renews" if row.kind == "subscription" else "due"
             text = (f"Tracking {row.name}: {cost}{verb} {due:%a %d %b}. "
-                    f"I'll remind you {row.remind_days} day(s) before.")
+                    f"I'll remind you {life.count(row.remind_days, 'day')} before.")
         return SkillResult(text, {"id": row.id, "next_due": row.next_due})
 
 
@@ -126,14 +136,20 @@ class AddHabit:
                    "('vitamin at 9 am and 9 pm'). Nudges only when the user falls behind, never at night.")
 
     async def run(self, args: HabitArgs, ctx: RunContext) -> SkillResult:
-        times = sorted({t.strip()[:5].zfill(5) for t in args.times if t.strip()})
+        if not args.name.strip():
+            return SkillResult("What habit should I track?", {})
+        given = [t.strip() for t in args.times if t.strip()]
+        times = sorted({t.zfill(5) for t in given if CLOCK.match(t)})
+        if len(times) < len(set(given)):
+            bad = ", ".join(t for t in given if not CLOCK.match(t))
+            return SkillResult(f"I couldn't read {bad} as a time. Give times like 09:00 or 21:30.", {})
         with SessionLocal() as db:
             row = life.find_habit(db, ctx.user_id, args.name) or Habit(user_id=ctx.user_id, name=args.name.strip())
             row.target, row.unit, row.times = args.target or len(times) or 1, args.unit, times
             db.add(row)
             db.commit()
             when = f" at {', '.join(times)}" if times else ""
-        return SkillResult(f"Tracking {row.name}: {row.target} {row.unit}(s) a day{when}.", {"id": row.id})
+        return SkillResult(f"Tracking {row.name}: {life.count(row.target, row.unit)} a day{when}.", {"id": row.id})
 
 
 class LogArgs(BaseModel):
@@ -204,14 +220,17 @@ class AddToList:
         with SessionLocal() as db:
             have = {i.text.lower() for i in life.items_on(db, ctx.user_id, name)}
             added = []
-            for text in (t.strip() for t in args.items):
-                if text and text.lower() not in have:
-                    db.add(ListItem(user_id=ctx.user_id, list=name, text=text[:120]))
+            wanted = [t.strip()[:120] for t in args.items if t.strip()]
+            if not wanted:
+                return SkillResult(f"Tell me what to add to your {name} list.", {"added": [], "list": name})
+            for text in wanted:
+                if text.lower() not in have:
+                    db.add(ListItem(user_id=ctx.user_id, list=name, text=text))
                     have.add(text.lower())
                     added.append(text)
             db.commit()
         said = f"Added {', '.join(added)}" if added else "Those were already there"
-        return SkillResult(f"{said}. Your {name} list has {len(have)} item(s).", {"added": added, "list": name})
+        return SkillResult(f"{said}. Your {name} list has {life.count(len(have), 'item')}.", {"added": added, "list": name})
 
 
 class RemoveFromList:
@@ -259,7 +278,7 @@ class ClearList:
             for item in items:
                 db.delete(item)
             db.commit()
-        return SkillResult(f"Cleared your {name} list ({len(items)} item(s)).", {"cleared": len(items)})
+        return SkillResult(f"Cleared your {name} list ({life.count(len(items), 'item')}).", {"cleared": len(items)})
 
 
 skills = [TrackPayment(), MarkPaid(), ListPayments(), StopTracking(), AddHabit(), LogHabit(), HabitStatus(),

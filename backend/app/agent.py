@@ -20,6 +20,7 @@ NEEDS = {Permission.CHANGE: {"apply", "yes"}, Permission.CRITICAL: {"yes"}}
 # A committing step never shares a turn with the step that prepares it: the user sees the preview first and
 # says yes on their next turn, so a failed preparation can never be followed by a "yes?" prompt.
 REVIEW_FIRST = {"confirm_order": {"order_from_link", "order_usual"}, "submit_form": {"fill_form"}}
+READ_OUT = "This result was already read out to the user word for word. Do not repeat it or add to it."
 DATA_TAG_RE = re.compile(r"</?\s*data\s*>", re.IGNORECASE)
 
 PLAN_SCHEMA = {
@@ -177,6 +178,7 @@ class Agent:
         messages = [{"role": "system", "content": system}, *turn.history, {"role": "user", "content": said}]
         todo = {s["skill"] for s in plan["steps"] if s["skill"]}
         answer, last_summary = "", ""
+        read_out, unspoken = False, list[str]()  # a final result was spoken; results the model has not worded yet
         for _ in range(settings().agent_max_steps):
             tools = [as_tool(self.skills[n]) for n in sorted(todo)] or None
             calls, start, first, tokens = [], time.perf_counter(), 0.0, 0
@@ -197,22 +199,27 @@ class Agent:
                 record("llm_first_token", turn.user_id, latency_ms=round(first * 1000))
             if not calls:
                 break
+            unspoken = [] if answer and not read_out else unspoken  # the model worded the earlier ones
             messages.append({
                 "role": "assistant", "content": "",
                 "tool_calls": [{"function": {"name": c.name, "arguments": c.arguments}} for c in calls],
             })
-            finals = []
             for call in calls:
                 last_summary, consume_skill, final = await self._run_skill(call, turn, plan)
                 if consume_skill:
                     todo.discard(call.name)  # each planned skill runs once per turn once arguments validate
-                if final:
-                    finals.append(last_summary)
-                messages.append({"role": "tool", "tool_name": call.name, "content": _wrap_data(last_summary)})
-            if len(finals) == len(calls):  # the user's own data, read out as the tool wrote it, so nothing is invented
-                spoken = (" " if answer and not answer[-1].isspace() else "") + " ".join(finals)
-                answer += spoken
-                await turn.emit("answer.delta", text=spoken)
+                if final:  # the user's own data: read out as the tool wrote it, so the model cannot pad or reword it
+                    read_out = True
+                    answer += await self._say(turn, answer, last_summary)
+                    messages.append({"role": "tool", "tool_name": call.name, "content": READ_OUT})
+                else:
+                    unspoken.append(last_summary)
+                    messages.append({"role": "tool", "tool_name": call.name, "content": _wrap_data(last_summary)})
+            if read_out and not todo:
+                # Nothing is left to run. Ending here, with the other tools' own results, keeps the model from
+                # adding to what was read out (it used to tack an invented schedule onto "plan my day").
+                for summary in unspoken:
+                    answer += await self._say(turn, answer, summary)
                 break
         answer = answer.strip()
         if not answer:
@@ -223,6 +230,12 @@ class Agent:
                 step["done"] = True
                 await turn.emit("plan.step", index=index, done=True)
         return answer, plan
+
+    @staticmethod
+    async def _say(turn: Turn, answer: str, text: str) -> str:
+        chunk = (" " if answer and not answer[-1].isspace() else "") + text
+        await turn.emit("answer.delta", text=chunk)
+        return chunk
 
     async def _run_skill(self, call: ToolCall, turn: Turn, plan: dict[str, Any]) -> tuple[str, bool, bool]:
         skill = self.skills.get(call.name)

@@ -99,10 +99,12 @@ class SaveUsual:
     async def run(self, args: SaveUsualArgs, ctx: RunContext) -> SkillResult:
         last = orders.ORDERS.get(ctx.user_id)
         request = args.request or (last.request if last else "")
-        url = args.url or (last.url if last else "")
+        url = (args.url or (last.url if last else "")).strip()
         if not (request and url):
             return SkillResult("I need the link and what to order to save a usual. Share the store link.", {})
-        key = args.name.strip().lower()
+        key = " ".join(args.name.replace(":", " ").replace("|", " ").lower().split())  # both are separators below
+        if not key:
+            return SkillResult("What should I call this usual?", {})
         with SessionLocal() as db:
             row = _usuals(db, ctx.user_id).get(key) or Memory(user_id=ctx.user_id, kind="usual", text="")
             row.text, row.updated_at = f"Usual {key}: {request} | {url}", now()
