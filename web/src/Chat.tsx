@@ -73,7 +73,7 @@ function Extras({ extras }: { extras: Extra[] }) {
         }
         if (extra.kind === 'diff') {
           return (
-            <div key={i} className="rounded-xl border border-line bg-surface/60 p-3 font-mono text-xs">
+            <div key={i} className="rounded-xl border border-line bg-surface p-3 font-mono text-xs">
               <p className="mb-2 text-muted">Staged for review: {extra.changes.map((c) => c.path).join(', ')}</p>
               <pre className="code-layer max-h-56 overflow-auto p-0 text-[12px]">
                 {extra.changes.flatMap((c) => c.diff.split('\n')).slice(0, 120).map((line, n) => (
@@ -97,7 +97,7 @@ function Extras({ extras }: { extras: Extra[] }) {
         }
         if (extra.kind === 'email') {
           return (
-            <div key={i} className="rounded-xl border border-line bg-surface/60 p-3 text-sm">
+            <div key={i} className="rounded-xl border border-line bg-surface p-3 text-sm">
               <p className="font-mono text-xs text-muted">To {extra.to.join(', ')}</p>
               <p className="font-semibold">{extra.subject}</p>
               <p className="mt-1 whitespace-pre-wrap text-ink">{extra.body}</p>
@@ -270,7 +270,7 @@ function Bubble({ item }: { item: Item }) {
   if (item.role === 'user') {
     return (
       <div className="flex justify-end">
-        <div className="group relative max-w-xl sm:max-w-2xl rounded-2xl rounded-tr-xs border border-line/60 bg-raised/40 px-4 py-3">
+        <div className="group relative max-w-xl sm:max-w-2xl rounded-2xl rounded-tr-xs border border-line/60 bg-raised px-4 py-3">
           <p className={`whitespace-pre-wrap break-words text-sm leading-relaxed ${item.live ? 'text-muted italic' : 'text-ink'}`}>
             {item.text || '…'}
           </p>
@@ -295,7 +295,7 @@ function Bubble({ item }: { item: Item }) {
       <div className="group relative min-w-0 max-w-2xl flex-1 space-y-3">
         {/* Restatement Callout */}
         {item.restate && (
-          <div className="rounded-xl border border-line bg-surface/70 px-3.5 py-2 font-mono text-xs">
+          <div className="rounded-xl border border-line bg-surface px-3.5 py-2 font-mono text-xs">
             <span className="font-semibold text-accent uppercase tracking-wider">Plan Target: </span>
             <span className="text-muted">{item.restate}</span>
             {item.understood && (
@@ -311,7 +311,7 @@ function Bubble({ item }: { item: Item }) {
 
         {/* Plan Steps */}
         {item.steps && item.steps.length > 0 && (
-          <div className="rounded-xl border border-line bg-surface/40 p-3.5 shadow-xs">
+          <div className="rounded-xl border border-line bg-surface p-3.5 shadow-xs">
             <div className="mb-2.5 flex items-center justify-between font-mono text-xs">
               <span className="label flex items-center gap-1.5">
                 <Terminal className="h-3 w-3 text-accent" /> Execution Steps
@@ -378,7 +378,7 @@ function Bubble({ item }: { item: Item }) {
 
             {/* Thinking / Reasoning Breakdown */}
             {item.tools?.some((t) => t.data?.thinking?.length > 0) && (
-              <div className="rounded-xl border border-line bg-surface/80 p-3.5 font-mono text-xs shadow-xs">
+              <div className="rounded-xl border border-line bg-surface p-3.5 font-mono text-xs shadow-xs">
                 <div className="flex items-center gap-1.5 font-semibold text-muted">
                   <Sparkles className="h-3.5 w-3.5 text-accent" />
                   <span className="text-ink">Reasoning & Product Evaluation</span>
@@ -427,7 +427,7 @@ function Bubble({ item }: { item: Item }) {
 
         {/* Text Answer */}
         {(item.text || item.live) && (
-          <div className="relative rounded-2xl rounded-tl-xs border border-line/50 bg-raised/40 px-4 py-3">
+          <div className="relative rounded-2xl rounded-tl-xs border border-line/50 bg-raised px-4 py-3">
             <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">
               {item.text}
               {item.live && (

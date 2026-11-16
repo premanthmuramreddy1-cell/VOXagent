@@ -6,9 +6,9 @@
 :root {
   --void: #eef3fa;
   --void-glow: #dbe7f7;
-  --surface: rgba(244, 247, 252, 0.72);
-  --raised: rgba(255, 255, 255, 0.8);
-  --raised-hover: rgba(255, 255, 255, 0.95);
+  --surface: rgba(244, 247, 252, 0.9);
+  --raised: rgba(255, 255, 255, 0.92);
+  --raised-hover: rgba(255, 255, 255, 0.98);
   --line: rgba(30, 60, 110, 0.16);
   --dot: rgba(10, 126, 164, 0.10);
   --ink: #0b1424;
@@ -29,9 +29,9 @@
 :root[data-theme="dark"] {
   --void: #03050b;
   --void-glow: #0b1430;
-  --surface: rgba(5, 8, 18, 0.6);
-  --raised: rgba(12, 18, 36, 0.66);
-  --raised-hover: rgba(22, 32, 60, 0.78);
+  --surface: rgba(5, 8, 18, 0.88);
+  --raised: rgba(12, 18, 36, 0.9);
+  --raised-hover: rgba(22, 32, 60, 0.94);
   --line: rgba(110, 200, 255, 0.16);
   --dot: rgba(94, 231, 255, 0.07);
   --ink: #e8f1ff;
@@ -126,13 +126,13 @@ body {
     @apply min-h-10 w-full rounded-xl border border-line bg-raised px-3.5 py-2 text-sm text-ink placeholder:text-muted/60 transition-colors focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent;
   }
   .panel {
-    @apply rounded-2xl border border-line bg-raised backdrop-blur-xl;
+    @apply rounded-2xl border border-line bg-raised backdrop-blur-md;
     background-image: radial-gradient(var(--dot) 0.7px, transparent 0.9px);
     background-size: 6px 6px;
   }
   /* Bot-driven cards (news deck, built objects): an instrument panel with a lit top edge. */
   .deck {
-    @apply backdrop-blur-xl;
+    @apply backdrop-blur-md;
     position: relative;
     background-image: radial-gradient(var(--dot) 0.7px, transparent 0.9px);
     background-size: 6px 6px;
@@ -150,12 +150,12 @@ body {
     @apply inline-flex items-center rounded-md border border-line px-1.5 py-0.5 text-muted;
   }
   .panel-glass {
-    @apply rounded-2xl border border-line bg-raised backdrop-blur-xl;
+    @apply rounded-2xl border border-line bg-raised backdrop-blur-md;
     background-image: radial-gradient(var(--dot) 0.7px, transparent 0.9px);
     background-size: 6px 6px;
   }
   .glass {
-    @apply backdrop-blur-xl;
+    @apply backdrop-blur-md;
     background-image: radial-gradient(var(--dot) 0.7px, transparent 0.9px);
     background-size: 6px 6px;
   }
@@ -173,7 +173,7 @@ body {
   transition: opacity 400ms ease-out;
 }
 [data-botshow] .chat-rail:not(:hover):not(:focus-within) {
-  opacity: 0.28;
+  opacity: 0.6;
 }
 @media (prefers-reduced-motion: reduce) {
   .chat-rail { transition: none; }

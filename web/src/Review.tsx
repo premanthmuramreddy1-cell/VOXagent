@@ -195,7 +195,7 @@ export function ReportView({ report, shared }: { report: Report; shared?: boolea
             const textColor = isGood ? 'text-ok' : isMedium ? 'text-warn' : 'text-danger'
 
             return (
-              <div key={area} className="rounded-xl border border-line bg-surface/60 p-3.5">
+              <div key={area} className="rounded-xl border border-line bg-surface p-3.5">
                 <div className="flex items-center justify-between font-mono text-xs">
                   <span className="font-medium text-muted capitalize">{area}</span>
                   <span className={`font-bold ${textColor}`}>{value}%</span>
@@ -333,7 +333,7 @@ export function ReportView({ report, shared }: { report: Report; shared?: boolea
 
       {/* Checks That Did Not Run */}
       {report.not_run.length > 0 && (
-        <section className="rounded-xl border border-line bg-surface/40 p-4 text-xs">
+        <section className="rounded-xl border border-line bg-surface p-4 text-xs">
           <h4 className="label mb-2 flex items-center gap-1.5">
             <XCircle className="h-3.5 w-3.5 text-muted" /> Skipped / Inapplicable Analyzers
           </h4>

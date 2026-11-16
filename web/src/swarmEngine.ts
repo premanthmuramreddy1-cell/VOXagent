@@ -28,7 +28,13 @@ uniform vec2 uPointer;    // -1..1
 out vec3 vColor;
 out float vAlpha;
 
-float hash(float n) { return fract(sin(n * 12.9898) * 43758.5453); }
+// Integer hash: fract(sin(n)) needs sin() of ~1e7 radians, which Apple GPUs reduce accurately but D3D/ANGLE on
+// Intel and AMD (most Windows laptops) do not, so the bots clumped into stripes there. Bits in, bits out: same everywhere.
+float hash(float n) {
+  uint x = floatBitsToUint(n);
+  x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+  return float(x >> 8) * (1.0 / 16777216.0);
+}
 
 vec3 formation(float form, float id, float t, float s1, float s2) {
   if (form > 3.5) {                          // a built shape: several bots per point, spread a little for volume
@@ -105,7 +111,7 @@ void main() {
   vec3 violet = uLight > 0.5 ? vec3(0.30, 0.14, 0.55) : vec3(0.62, 0.42, 1.0);
   vec3 spark = uLight > 0.5 ? vec3(0.55, 0.30, 0.02) : vec3(1.0, 0.78, 0.42);
   vColor = mix(mix(cyan, violet, clamp(p.y * 0.9 + s1 * 0.5, 0.0, 1.0)), spark, step(0.996 - energy * 0.01, s2));
-  vAlpha = (dust ? 0.22 : 0.55 + energy * 0.25) * smoothstep(5.0, 1.5, z) * (uLight > 0.5 ? 1.4 : 1.0);
+  vAlpha = (dust ? 0.22 : 0.32 + energy * 0.25) * smoothstep(5.0, 1.5, z) * (uLight > 0.5 ? 1.4 : 1.0);
 }`
 
 const FRAGMENT = `#version 300 es
@@ -173,7 +179,10 @@ export class Swarm {
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: true, powerPreference: 'high-performance' })
     if (!gl) throw new Error('WebGL2 is not available')
     this.gl = gl
-    this.count = count
+    // No GPU (hardware acceleration off, or Windows' "Basic Render Driver"): WebGL runs on the CPU, so draw the minimum.
+    const info = gl.getExtension('WEBGL_debug_renderer_info')
+    const renderer = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER))
+    this.count = /swiftshader|llvmpipe|software|basic render/i.test(renderer) ? Math.min(count, MIN_BOTS) : count
     const program = gl.createProgram()!
     gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, VERTEX))
     gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, FRAGMENT))
