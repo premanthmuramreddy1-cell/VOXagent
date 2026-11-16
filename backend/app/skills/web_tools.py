@@ -14,8 +14,9 @@ class SearchArgs(BaseModel):
 
 class WebSearch:
     name, input_schema, permission = "web_search", SearchArgs, Permission.READ
-    description = ("Search the internet for current information (docs, error messages, library versions, news). "
-                   "Returns titles, links and snippets to cite.")
+    description = ("Search the internet for current information (docs, error messages, library versions, facts). "
+                   "Returns titles, links and snippets to cite. For headlines, topic news, scores or market prices "
+                   "use world_briefing instead.")
 
     async def run(self, args: SearchArgs, ctx: RunContext) -> SkillResult:
         hits = await web.search(args.query)
