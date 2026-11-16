@@ -65,6 +65,33 @@ def test_cloud_accumulates_streamed_tool_call_arguments():
     assert events[-1].tool_calls == [ToolCall("shopping", {"query": "mouse", "quantity": 2})]
 
 
+def test_cloud_keeps_parallel_tool_calls_apart_when_index_is_missing():
+    # Gemini's OpenAI-compatible stream sends each call whole, with an id but no index.
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse(
+            {"choices": [{"delta": {"tool_calls": [
+                {"id": "a", "type": "function", "function": {"name": "weather", "arguments": '{"city": "Paris"}'}},
+                {"id": "b", "type": "function", "function": {"name": "time_in", "arguments": '{"city": "Paris"}'}},
+            ]}}]},
+        ))
+
+    provider = CloudLLM("gemini-3.1-flash-lite", transport=httpx.MockTransport(handler))
+    events = collect(provider, [{"role": "user", "content": "weather and time"}], tools=[{"type": "function"}])
+
+    assert events[-1].tool_calls == [ToolCall("weather", {"city": "Paris"}), ToolCall("time_in", {"city": "Paris"})]
+
+
+def test_cloud_asks_for_usage_in_the_stream():
+    sent: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.update(json.loads(request.content))
+        return httpx.Response(200, content=sse({"choices": [{"delta": {"content": "ok"}}]}))
+
+    collect(CloudLLM("m", transport=httpx.MockTransport(handler)), [{"role": "user", "content": "hi"}])
+    assert sent["stream_options"] == {"include_usage": True}  # Gemini omits usage (and cost) without it
+
+
 def test_cloud_uses_json_mode_and_translates_tool_history():
     sent: dict = {}
 

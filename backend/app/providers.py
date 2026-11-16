@@ -219,6 +219,7 @@ class CloudLLM:
             "model": self.model,
             "messages": _openai_messages(messages, schema),
             "stream": True,
+            "stream_options": {"include_usage": True},  # Gemini only reports usage (and so cost) when asked
         }
         if tools:
             body["tools"] = tools
@@ -272,9 +273,10 @@ class CloudLLM:
                             for choice in chunk.get("choices") or []:
                                 delta = choice.get("delta") or {}
                                 for call in delta.get("tool_calls") or []:
-                                    slot = calls.setdefault(
-                                        int(call.get("index") or 0), {"name": "", "arguments": ""}
-                                    )
+                                    index = call.get("index")
+                                    if index is None:  # Gemini: no index, each call arrives whole with its own id
+                                        index = len(calls) if call.get("id") or not calls else max(calls)
+                                    slot = calls.setdefault(int(index), {"name": "", "arguments": ""})
                                     function = call.get("function") or {}
                                     slot["name"] += function.get("name") or ""
                                     arguments = function.get("arguments")
