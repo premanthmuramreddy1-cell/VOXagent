@@ -44,7 +44,10 @@ export async function api<T = any>(path: string, init: RequestInit = {}, retry =
   if (response.status === 401 && retry && !path.startsWith('/auth/') && (await refresh())) {
     return api(path, init, false)
   }
-  const isJson = response.headers.get('content-type')?.includes('json')
+  const type = response.headers.get('content-type') ?? ''
+  const isJson = type.includes('json')
+  // The API never answers with a page: HTML here is the web host's fallback, so the request never reached the API.
+  if (type.includes('text/html')) throw new Error('The server did not answer that request. Reload the page and try again.')
   const body = isJson ? await response.json() : await response.text()
   if (!response.ok) {
     const detail = isJson ? body.detail : body
