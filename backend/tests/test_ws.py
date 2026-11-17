@@ -291,3 +291,10 @@ def test_an_empty_or_odd_length_recording_does_not_crash(client, token, fake):
     sock.send_json({"type": "audio.stop"})
     events, _ = collect(sock)
     assert "answer.done" in types(events)
+
+
+def test_speech_skips_markdown_symbols_but_keeps_words():
+    say = ws_module.speakable
+    assert say("## Plan\n- **Apple** and `pip`\n* [docs](https://x.dev)") == "Plan\nApple and pip\ndocs"
+    assert say("2 * 3 * 4 is 24") == "2 * 3 * 4 is 24"  # spaced asterisks are maths
+    assert say("1. first step") == "1. first step"  # numbers carry meaning when read out

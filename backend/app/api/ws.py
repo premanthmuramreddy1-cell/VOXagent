@@ -31,6 +31,14 @@ from app.spoken import normalize
 router = APIRouter()
 log = logging.getLogger("vox")
 SENTENCE = re.compile(r"\s*(.+?[.!?।:\n])(?=\s)", re.S)
+LINK = re.compile(r"\[([^\]\n]+)\]\(https?://[^)\s]+\)")
+LINE_MARK = re.compile(r"^\s*(#{1,6}|[-*•])\s+", re.M)
+INLINE_MARK = re.compile(r"\*\*|`|(?<![\w*])\*(?=\S)|(?<=\S)\*(?![\w*])")
+
+
+def speakable(text: str) -> str:
+    """Drop Markdown symbols the screen draws but a voice would read out ("asterisk", "hash")."""
+    return INLINE_MARK.sub("", LINE_MARK.sub("", LINK.sub(r"\1", text)))
 BYTES_PER_S = prov.SAMPLE_RATE * 2
 SORRY = "Sorry, I didn't catch that. Could you say it again?"
 CHANNEL_TTL_S = 3600
@@ -137,8 +145,8 @@ class Speaker:
         if not self.enabled:
             return
         for part in text.split("```"):
-            if not self.in_code and part.strip():
-                self.queue.put_nowait(part.strip())
+            if not self.in_code and (said := speakable(part).strip()):
+                self.queue.put_nowait(said)
             self.in_code = not self.in_code
         self.in_code = not self.in_code  # split yields one more part than there are fences
 
