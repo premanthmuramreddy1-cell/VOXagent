@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ServerEvent } from './api'
-import { api, post, Socket, upload } from './api'
+import { api, download, post, Socket, upload } from './api'
 import { parse, type Inline } from './markdown'
 import { Mic, Player } from './audio'
 import { setSwarmMood } from './swarmEngine'
@@ -31,6 +31,8 @@ import {
   MessageSquare,
   Pencil,
   Trash2,
+  Search,
+  Download,
 } from 'lucide-react'
 
 type Step = { text: string; skill: string; done: boolean }
@@ -181,6 +183,29 @@ function Spans({ nodes }: { nodes: Inline[] }) {
   })
 }
 
+function CodeBlock({ code, lang }: { code: string; lang: string }) {
+  const [copied, setCopied] = useState(false)
+  async function copy() {
+    await navigator.clipboard.writeText(code).catch(() => {})
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+  return (
+    <div className="overflow-hidden rounded-lg border border-line bg-surface">
+      <div className="flex items-center justify-between border-b border-line px-3 py-1 font-mono text-[10px] text-muted">
+        <span>{lang || 'code'}</span>
+        <button onClick={copy} className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:text-ink [@media(pointer:coarse)]:min-h-11" aria-label="Copy code">
+          {copied ? <Check className="h-3 w-3 text-ok" /> : <Copy className="h-3 w-3" />}
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <pre className="overflow-x-auto p-3 font-mono text-[12px] leading-snug">
+        <code>{code}</code>
+      </pre>
+    </div>
+  )
+}
+
 /** An assistant reply with its Markdown drawn: lists, code, links and emphasis instead of raw symbols. */
 function Rich({ text }: { text: string }) {
   const blocks = useMemo(() => parse(text), [text])
@@ -197,12 +222,7 @@ function Rich({ text }: { text: string }) {
           <Spans nodes={b.c} />
         </h3>
       )
-    if (b.t === 'pre')
-      return (
-        <pre key={i} className="overflow-x-auto rounded-lg border border-line bg-surface p-3 font-mono text-[12px] leading-snug">
-          <code>{b.v}</code>
-        </pre>
-      )
+    if (b.t === 'pre') return <CodeBlock key={i} code={b.v} lang={b.lang} />
     const items = b.items.map((it, j) => (
       <li key={j}>
         <Spans nodes={it} />
@@ -518,6 +538,9 @@ export default function Chat() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [editing, setEditing] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [found, setFound] = useState<Session[] | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const [current, setCurrent] = useState('')
   const [items, setItems] = useState<Item[]>([])
   const [text, setText] = useState('')
@@ -544,6 +567,7 @@ export default function Chat() {
 
   /** Switch conversations: the old one's messages, pending yes/no and busy state go with it. */
   function openSession(id: string) {
+    if (innerWidth < 768) setSidebarOpen(false) // on a phone the sidebar covers the chat just picked
     if (id === current) return
     setItems([])
     setConfirm(null)
@@ -615,6 +639,8 @@ export default function Chat() {
     setError(null)
     setBusy(true)
     setItems((list) => [...list, { role: 'user', text: message }])
+    // the server names a new session after its first message; show that name now, not after a reload
+    setSessions((list) => list.map((s) => (s.id === current && s.title === 'New session' && message ? { ...s, title: message.slice(0, 60) } : s)))
     setText('')
     setAttached(null)
   }
@@ -720,7 +746,14 @@ export default function Chat() {
       if (isModel(file)) importFile(file)
       else attach(file)
     }
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && releaseBots()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') releaseBots()
+      if (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault()
+        setSidebarOpen(true)
+        setTimeout(() => searchRef.current?.focus()) // after the sidebar stops being inert
+      }
+    }
     addEventListener('dragover', onOver)
     addEventListener('drop', onDrop)
     addEventListener('keydown', onKey)
@@ -765,6 +798,25 @@ export default function Chat() {
     else await createSession()
   }
 
+  useEffect(() => {
+    const q = query.trim()
+    if (!q) return
+    const timer = setTimeout(() => {
+      api<Session[]>(`/sessions?q=${encodeURIComponent(q)}`).then(setFound).catch(() => setFound(null))
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [query, sessions])
+
+  async function exportSession() {
+    if (!current) return
+    try {
+      download(`chat-${current.slice(0, 8)}.md`, await api(`/sessions/${current}/export`), 'text/markdown')
+    } catch (e) {
+      setError({ message: (e as Error).message })
+    }
+  }
+
+  const shown = query.trim() && found ? found : sessions // a cleared search falls back without a state reset
   const currentSession = sessions.find((s) => s.id === current)
 
   return (
@@ -792,10 +844,24 @@ export default function Chat() {
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
           <div className="px-2.5 py-1.5 flex items-center justify-between">
             <span className="label text-[10px]">Chat Sessions</span>
-            <span className="font-mono text-[10px] text-muted">{sessions.length}</span>
+            <span className="font-mono text-[10px] text-muted">{shown.length}</span>
           </div>
+          <label className="relative mx-1 mb-1 block">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+            <input
+              ref={searchRef}
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
+              placeholder="Search chats  ⌘K"
+              aria-label="Search chats"
+              className="field h-8 w-full pl-8 pr-2 font-mono text-xs [@media(pointer:coarse)]:h-11"
+            />
+          </label>
+          {shown === found && !found.length && <p className="px-3 py-2 font-mono text-xs text-muted">No chats match “{query.trim()}”.</p>}
 
-          {sessions.map((s) => {
+          {shown.map((s) => {
             const isActive = s.id === current
             const action =
               'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-raised-hover hover:text-ink [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11'
@@ -881,6 +947,14 @@ export default function Chat() {
               <span className="font-mono text-xs font-semibold text-ink truncate max-w-xs sm:max-w-md">
                 {currentSession?.title || 'Active Session'}
               </span>
+              <button
+                onClick={exportSession}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-raised hover:text-ink [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11"
+                title="Download this chat as Markdown"
+                aria-label="Download this chat as Markdown"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </button>
             </div>
           </div>
 

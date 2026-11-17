@@ -56,3 +56,33 @@ def test_deleting_a_bot_linked_session_gives_the_bot_a_fresh_one(client):
         link = db.scalars(select(BotLink).where(BotLink.external_id == f"qa-{sid}")).one()
         assert link.session_id and link.session_id != sid
     assert [s["title"] for s in client.get("/sessions", headers=headers).json()] == ["Telegram chat"]
+
+
+def test_search_matches_titles_and_message_text_of_own_sessions_only(client):
+    headers, _ = signup(client)
+    other, _ = signup(client)
+    trip, notes, theirs = new_session(client, headers), new_session(client, headers), new_session(client, other)
+    client.patch(f"/sessions/{trip}", headers=headers, json={"title": "Goa trip"})
+    with SessionLocal() as db:
+        db.add(Message(session_id=notes, role="assistant", text="Book the GOA ferry at 7"))
+        db.add(Message(session_id=theirs, role="user", text="goa"))
+        db.commit()
+    ids = lambda q: {s["id"] for s in client.get("/sessions", headers=headers, params={"q": q}).json()}
+    assert ids("goa") == {trip, notes}
+    assert ids("  ") == {trip, notes}  # blank search lists everything
+    assert ids("100%") == set() and ids("_") == set()  # LIKE wildcards are matched literally
+
+
+def test_export_session_as_markdown(client):
+    headers, _ = signup(client)
+    sid = new_session(client, headers)
+    client.patch(f"/sessions/{sid}", headers=headers, json={"title": "Plans"})
+    with SessionLocal() as db:
+        db.add(Message(session_id=sid, role="user", text="hi"))
+        db.add(Message(session_id=sid, role="assistant", text="- one\n- two"))
+        db.commit()
+    r = client.get(f"/sessions/{sid}/export", headers=headers)
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/markdown")
+    assert r.text.startswith("# Plans") and "**You:**\n\nhi" in r.text and "**VoxAgent:**\n\n- one\n- two" in r.text
+    other, _ = signup(client)
+    assert client.get(f"/sessions/{sid}/export", headers=other).status_code == 404

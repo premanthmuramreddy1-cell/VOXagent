@@ -38,8 +38,13 @@ def create_session(user: User = Depends(current_user), db: Session = Depends(get
 
 
 @router.get("/sessions")
-def list_sessions(user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
-    rows = db.scalars(select(ChatSession).where(ChatSession.user_id == user.id).order_by(ChatSession.created_at.desc()))
+def list_sessions(q: str = "", user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
+    query = select(ChatSession).where(ChatSession.user_id == user.id)
+    if term := " ".join(q.split())[:100]:
+        like = "%" + term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        said = select(Message.id).where(Message.session_id == ChatSession.id, Message.text.ilike(like, escape="\\"))
+        query = query.where(ChatSession.title.ilike(like, escape="\\") | said.exists())
+    rows = db.scalars(query.order_by(ChatSession.created_at.desc()))
     return [{"id": c.id, "title": c.title, "created_at": c.created_at.isoformat()} for c in rows]
 
 
@@ -83,6 +88,18 @@ def list_messages(session_id: str, user: User = Depends(current_user), db: Sessi
     _owned(db, ChatSession, session_id, user)
     rows = db.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.created_at))
     return [{"role": m.role, "text": m.text, "plan": m.plan} for m in rows]
+
+
+@router.get("/sessions/{session_id}/export")
+def export_session(session_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> Response:
+    chat = _owned(db, ChatSession, session_id, user)
+    rows = db.scalars(select(Message).where(Message.session_id == session_id).order_by(Message.created_at))
+    parts = [f"# {chat.title}", f"_Exported from VoxAgent, {now():%Y-%m-%d %H:%M} UTC_"]
+    for m in rows:
+        if m.text:
+            parts.append(f"**{'You' if m.role == 'user' else 'VoxAgent'}:**\n\n{m.text}")
+    headers = {"Content-Disposition": f'attachment; filename="chat-{chat.id[:8]}.md"'}
+    return Response("\n\n".join(parts) + "\n", media_type="text/markdown", headers=headers)
 
 
 @router.get("/sessions/{session_id}/activity")
