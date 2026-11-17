@@ -1,7 +1,8 @@
 """Memory, notes, reminders, settings, push subscriptions and the encrypted form-filling profile."""
 
 import re
-from datetime import timedelta
+from datetime import date, timedelta
+from typing import Literal
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app import life, personal, push
 from app.crypto import load_secret, save_secret
-from app.db import Habit, ListItem, Memory, Note, PushSubscription, Reminder, User, get_db, now
+from app.db import Habit, ListItem, Payment, Memory, Note, PushSubscription, Reminder, User, get_db, now
 from app.security import current_user
 
 router = APIRouter()
@@ -239,6 +240,60 @@ def log_habit(habit_id: str, body: HabitLog, user: User = Depends(current_user),
 @router.delete("/habits/{habit_id}")
 def remove_habit(habit_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
     db.delete(_own(db, Habit, habit_id, user))
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- bills and subscriptions (tracked only, never paid)
+
+class PaymentBody(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    kind: Literal["subscription", "bill"] = "bill"
+    amount: float = Field(default=0, ge=0, le=10_000_000)
+    cycle: Literal["week", "month", "year"] = "month"
+    next_due: date
+
+
+def _payment(p: Payment, today: date) -> dict:
+    return {"id": p.id, "name": p.name, "kind": p.kind, "amount": p.amount, "currency": p.currency, "cycle": p.cycle,
+            "next_due": p.next_due, "autopay": p.autopay, "due_in": (date.fromisoformat(p.next_due) - today).days}
+
+
+@router.get("/payments")
+def list_payments(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    today = personal.local_now(db, user.id).date()
+    rows = list(db.scalars(select(Payment).where(Payment.user_id == user.id).order_by(Payment.next_due)))
+    return {"items": [_payment(p, today) for p in rows],
+            "monthly": {c: round(v, 2) for c, v in life.monthly_totals(rows).items()}}
+
+
+@router.post("/payments")
+def track_payment(body: PaymentBody, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    name = " ".join(body.name.split())
+    if not name:
+        raise HTTPException(422, "Give the payment a name.")
+    row = life.find_payment(db, user.id, name)
+    if row is None or row.name.lower() != name.lower():  # same name: update it, like the voice tool
+        row = Payment(user_id=user.id, name=name, currency=life.local_currency(personal.zone(db, user.id).key))
+        db.add(row)
+    row.kind, row.amount, row.cycle = body.kind, body.amount, body.cycle
+    row.next_due, row.day = body.next_due.isoformat(), body.next_due.day
+    db.commit()
+    return _payment(row, personal.local_now(db, user.id).date())
+
+
+@router.post("/payments/{payment_id}/paid")
+def pay(payment_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    row = _own(db, Payment, payment_id, user)
+    today = personal.local_now(db, user.id).date()
+    life.mark_paid(row, today)  # moves it to its next due date
+    db.commit()
+    return _payment(row, today)
+
+
+@router.delete("/payments/{payment_id}")
+def stop_payment(payment_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    db.delete(_own(db, Payment, payment_id, user))
     db.commit()
     return {"ok": True}
 

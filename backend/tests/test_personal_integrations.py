@@ -501,3 +501,22 @@ def test_habits_page_tracks_logs_corrects_and_removes(client):
     assert client.post(f"/habits/{water['id']}/log", headers=stranger, json={"count": 1}).status_code == 404
     assert client.delete(f"/habits/{water['id']}", headers=headers).json() == {"ok": True}
     assert client.get("/habits", headers=headers).json() == []
+
+
+def test_bills_page_tracks_totals_marks_paid_and_stops(client):
+    headers, _ = signup(client)
+    rent = client.post("/payments", headers=headers, json={"name": "Rent", "amount": 1000, "next_due": "2099-01-31"}).json()
+    assert (rent["kind"], rent["cycle"], rent["due_in"] > 0) == ("bill", "month", True)
+    client.post("/payments", headers=headers, json={"name": "Gym", "kind": "subscription", "amount": 1200,
+                                                    "cycle": "year", "next_due": "2099-03-01"})
+    again = client.post("/payments", headers=headers, json={"name": "rent", "amount": 1100, "next_due": "2099-01-31"}).json()
+    assert again["id"] == rent["id"]  # same bill updated
+    listed = client.get("/payments", headers=headers).json()
+    assert [p["name"] for p in listed["items"]] == ["Rent", "Gym"] and list(listed["monthly"].values()) == [1200.0]
+    paid = client.post(f"/payments/{rent['id']}/paid", headers=headers).json()
+    assert paid["next_due"] == "2099-02-28"  # month end carries over
+    assert client.post("/payments", headers=headers, json={"name": "x", "next_due": "soon"}).status_code == 422
+    stranger, _ = signup(client)
+    assert client.post(f"/payments/{rent['id']}/paid", headers=stranger).status_code == 404
+    assert client.delete(f"/payments/{rent['id']}", headers=headers).json() == {"ok": True}
+    assert [p["name"] for p in client.get("/payments", headers=headers).json()["items"]] == ["Gym"]

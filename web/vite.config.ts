@@ -4,7 +4,7 @@ import { defineConfig } from 'vite'
 
 const api = 'http://localhost:8000'
 export const paths = ['/auth', '/me', '/sessions', '/uploads', '/reviews', '/shared', '/skills', '/usage', '/admin', '/metrics',
-  '/workspaces', '/preview', '/memory', '/notes', '/reminders', '/integrations', '/push', '/billing', '/bots', '/webhooks', '/lists', '/deploy', '/habits']
+  '/workspaces', '/preview', '/memory', '/notes', '/reminders', '/integrations', '/push', '/billing', '/bots', '/webhooks', '/lists', '/deploy', '/habits', '/payments']
 
 // The dev server proxies the API so the app and backend share one origin.
 export default defineConfig({

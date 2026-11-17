@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlarmClockPlus, Bell, Brain, Check, ClipboardList, Flame, ListChecks, Minus, NotebookPen, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { AlarmClockPlus, Bell, Brain, Check, ClipboardList, Flame, Receipt, ListChecks, Minus, NotebookPen, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { api, post } from './api'
 
 type Memory = { id: string; kind: string; text: string }
 type Note = { id: string; text: string; tags: string[]; created_at: string }
+type Payment = { id: string; name: string; kind: string; amount: number; currency: string; cycle: string; next_due: string; autopay: boolean; due_in: number }
 type Habit = { id: string; name: string; target: number; unit: string; times: string[]; done: number; streak: number }
 type Reminder = { id: string; text: string; due: string; repeat: string }
 
@@ -38,15 +39,17 @@ export default function Assistant() {
   const [status, setStatus] = useState('')
   const [lists, setLists] = useState<Record<string, { id: string; text: string }[]>>({})
   const [habits, setHabits] = useState<Habit[]>([])
+  const [bills, setBills] = useState<{ items: Payment[]; monthly: Record<string, number> }>({ items: [], monthly: {} })
 
   const fail = (e: unknown) => setStatus((e as Error).message)
   const load = useCallback(async () => {
-    const [m, n, r, b, p, l, h] = await Promise.all([
+    const [m, n, r, b, p, l, h, pay] = await Promise.all([
       api<Memory[]>('/memory'), api<Note[]>('/notes'), api<Reminder[]>('/reminders'),
-      api<{ text: string }>('/reminders/briefing'), api<Record<string, string>>('/me/profile'), api('/lists'), api<Habit[]>('/habits'),
+      api<{ text: string }>('/reminders/briefing'), api<Record<string, string>>('/me/profile'), api('/lists'), api<Habit[]>('/habits'), api('/payments'),
     ])
     setLists(l)
     setHabits(h)
+    setBills(pay)
     setMemories(m)
     setNotes(n)
     setReminders(r)
@@ -130,6 +133,60 @@ export default function Assistant() {
       <Section icon={ClipboardList} title="Today" hint="Spoken each morning as a push">
         <p className="text-sm leading-relaxed">{briefing || '…'}</p>
         <button className="btn mt-3" onClick={enablePush}><Bell className="h-3.5 w-3.5" /> Turn on notifications</button>
+      </Section>
+
+      <Section icon={Receipt} title="Bills & subscriptions" hint={'Tracked only, never paid. Or say "I pay 649 a month for Netflix"'}>
+        <form
+          className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_6rem_auto_auto_auto_auto]"
+          onSubmit={async (e) => {
+            e.preventDefault()
+            const el = e.currentTarget
+            const form = new FormData(el)
+            try {
+              await post('/payments', {
+                name: form.get('name'), amount: Number(form.get('amount') || 0), kind: form.get('kind'),
+                cycle: form.get('cycle'), next_due: form.get('due'),
+              })
+              el.reset()
+              load()
+            } catch (err) {
+              fail(err)
+            }
+          }}
+        >
+          <input name="name" required className="field col-span-2 min-w-0 sm:col-span-1" placeholder="Rent" aria-label="Bill name" />
+          <input name="amount" type="number" min={0} step="any" className="field min-w-0" placeholder="Amount" aria-label="Amount" />
+          <input name="due" type="date" required className="field min-w-0" aria-label="Next due" />
+          <select name="kind" className="field" aria-label="Kind"><option value="bill">Bill</option><option value="subscription">Subscription</option></select>
+          <select name="cycle" className="field" aria-label="Every" defaultValue="month">
+            <option value="week">Weekly</option><option value="month">Monthly</option><option value="year">Yearly</option>
+          </select>
+          <button className="btn btn-accent col-span-2 sm:col-span-1" aria-label="Track bill"><Plus className="h-3.5 w-3.5" /></button>
+        </form>
+        <ul className="divide-y divide-line text-sm">
+          {bills.items.length === 0 && <li className="py-2 text-muted">Nothing tracked.</li>}
+          {bills.items.map((b) => {
+            const soon = b.due_in <= 3
+            return (
+              <li key={b.id} className="flex items-center gap-2 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate">{b.name}{b.autopay && <span className="ml-2 label">autopay</span>}</p>
+                  <p className={`font-mono text-xs ${b.due_in < 0 ? 'font-semibold text-danger' : soon ? 'text-accent' : 'text-muted'}`}>
+                    {b.amount ? `${b.currency}${b.amount.toLocaleString()} / ${b.cycle} · ` : ''}
+                    {b.due_in < 0 ? `Overdue since ${b.next_due}` : b.due_in === 0 ? 'Due today' : `Due in ${b.due_in} ${b.due_in === 1 ? 'day' : 'days'} (${b.next_due})`}
+                  </p>
+                </div>
+                <button className="btn-ghost min-h-8 px-2" title="Mark paid" aria-label={`Mark ${b.name} paid`} onClick={() => post(`/payments/${b.id}/paid`).then(load).catch(fail)}><Check className="h-3.5 w-3.5" /></button>
+                <button className="btn-ghost min-h-8 px-2" title="Stop tracking" aria-label={`Stop tracking ${b.name}`} onClick={() => confirm(`Stop tracking ${b.name}? This does not cancel the service.`) && api(`/payments/${b.id}`, { method: 'DELETE' }).then(load).catch(fail)}><Trash2 className="h-3.5 w-3.5" /></button>
+              </li>
+            )
+          })}
+        </ul>
+        {Object.keys(bills.monthly).length > 0 && (
+          <p className="mt-2 font-mono text-xs text-muted">
+            About {Object.entries(bills.monthly).map(([c, v]) => `${c}${v.toLocaleString()}`).join(' + ')} a month in total
+          </p>
+        )}
       </Section>
 
       <Section icon={Flame} title="Habits" hint={'Or say "I drank 2 glasses of water"'}>
