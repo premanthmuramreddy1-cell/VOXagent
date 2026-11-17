@@ -29,6 +29,14 @@ def test_explain_reads_an_uploaded_file(monkeypatch):
     assert "app.py" in user and "def f(): pass" in user
 
 
+def test_explain_uses_the_attachment_when_the_model_passes_its_filename_as_the_id(monkeypatch):
+    # live: the model sent upload_id="calc.py", which is not an id, and the turn failed with "unknown upload"
+    seen = []
+    monkeypatch.setattr(explain, "_from_upload", lambda user, upload: seen.append(upload) or {"calc.py": "x"})
+    asyncio.run(skill.run(Args(subject="what does add return", upload_id="calc.py"), context("ok", ["a" * 32])))
+    assert seen == ["a" * 32]
+
+
 def test_explain_caps_very_long_input():
     ctx = context("ok")
     asyncio.run(skill.run(Args(subject="x" * 100_000), ctx))

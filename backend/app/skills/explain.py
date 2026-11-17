@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from app.skills import Permission, RunContext, SkillResult
-from app.skills.code_review import _from_upload
+from app.skills.code_review import _from_upload, pick_upload
 
 MAX_CHARS = 16_000  # keeps the prompt inside a small local model's context
 
@@ -35,7 +35,7 @@ class Explain:
 
     async def run(self, args: Args, ctx: RunContext) -> SkillResult:
         text = args.subject.strip()
-        upload = args.upload_id or next(iter(ctx.upload_ids), "")
+        upload = pick_upload(args.upload_id, ctx)
         if upload:
             files = _from_upload(ctx.user_id, upload)
             text += "".join(f"\n\n--- {name} ---\n{body}" for name, body in files.items())

@@ -733,8 +733,9 @@ export default function Chat() {
             {/* Sidebar Toggle Button */}
             <button
               onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-line bg-raised text-muted transition-colors hover:text-ink"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-line bg-raised text-muted transition-colors hover:text-ink [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11"
               title={sidebarOpen ? 'Hide sessions sidebar' : 'Show sessions sidebar'}
+              aria-label={sidebarOpen ? 'Hide sessions sidebar' : 'Show sessions sidebar'}
             >
               <PanelLeft className="h-4 w-4" />
             </button>

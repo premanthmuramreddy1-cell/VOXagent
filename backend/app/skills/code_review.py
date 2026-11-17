@@ -106,6 +106,11 @@ def _from_blob(name: str, blob: bytes) -> dict[str, str]:
     return {_safe(name): blob.decode("utf-8", "replace")}
 
 
+def pick_upload(given: str, ctx: RunContext) -> str:
+    """The model's upload_id when it is a real id, else this turn's attachment (models pass the filename)."""
+    return given if re.fullmatch(r"[0-9a-f]{32}", given) else next(iter(ctx.upload_ids), "")
+
+
 def _from_upload(user_id: str, upload_id: str) -> dict[str, str]:
     if not re.fullmatch(r"[0-9a-f]{32}", upload_id):
         raise ValueError("unknown upload")
@@ -152,7 +157,7 @@ def _pasted(text: str) -> str:
 async def gather(args: Args, ctx: RunContext) -> tuple[str, dict[str, str]]:
     """Resolve what to review. Falls back to this turn's attachment, URL or pasted code."""
     url = args.github_url or next(iter(re.findall(r"https://github\.com/\S+", ctx.user_text)), "")
-    upload = args.upload_id or next(iter(ctx.upload_ids), "")
+    upload = pick_upload(args.upload_id, ctx)
     if upload:
         return f"upload {upload}", _from_upload(ctx.user_id, upload)
     if url:
