@@ -71,6 +71,9 @@ def site(tmp_path, monkeypatch):
     (tmp_path / "members.html").write_text(MEMBERS)
     (tmp_path / "paged.html").write_text(PAGED)
     (tmp_path / "thanks.html").write_text("<p>Your response was submitted.</p>")
+    (tmp_path / "enter.html").write_text('<form action="/done.html"><label for="n">Full name</label><input id="n" name="who"></form>')
+    (tmp_path / "apply.html").write_text('<form action="/done.html"><label for="n">Full name</label>'
+                                         '<input id="n" name="who"><input type="submit" value="Apply now"></form>')
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -197,3 +200,14 @@ def test_paged_form_answers_each_section_and_keeps_ticked_boxes(site):
     result, done = asyncio.run(flow())
     assert [f["field"] for f in result["filled"]] == ["Favourite colour?", "Which do you own?"]
     assert "c=blue" in done["url"] and "o=car" in done["url"] and "o=bike" in done["url"]  # Car stayed ticked
+
+
+@needs_browser
+def test_submit_works_without_a_submit_named_button(site):
+    async def flow():
+        for page in ("enter.html", "apply.html"):  # sent with Enter only; an input button with an unusual label
+            await forms.fill("u6", f"{site}/{page}", PROFILE)
+            done = await forms.submit("u6")
+            assert "/done.html?" in done["url"] and "who=Asha+Rao" in done["url"], page
+
+    asyncio.run(flow())

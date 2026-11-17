@@ -355,12 +355,17 @@ async def submit(user_id: str) -> dict:
         raise FormError("there is no filled form waiting; fill one first")
     session.touched = time.monotonic()
     page = session.page
-    button = await _button(page, SUBMIT_RE) or (
-        await page.locator("form button[type=submit], form button:not([type])").all() or [None])[0]
-    if button is None:
-        raise FormError("could not find the form's submit button")
+    button = await _button(page, SUBMIT_RE)
+    if button is None:  # an unusual label ("Apply now", an arrow icon): any visible submit control in the form
+        for candidate in await page.locator("form [type=submit], form [type=image], form button:not([type])").all():
+            if await candidate.is_visible():
+                button = candidate
+                break
     before = page.url
-    await button.click()
+    if button is not None:
+        await button.click()
+    elif not await page.evaluate("(() => { const f = document.querySelector('form'); f?.requestSubmit(); return !!f })()"):
+        raise FormError("could not find the form's submit button")  # forms sent with Enter have no button at all
     with contextlib.suppress(Exception):
         await page.wait_for_load_state("networkidle", timeout=15_000)
     await page.wait_for_timeout(1_500)
