@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from app import forms
 from app.config import settings
 from app.db import Activity, SessionLocal, record, record_error
-from app.providers import LLM, ToolCall, llm_stream
+from app.providers import LLM, ToolCall, llm_stream, log
 from app.skills import Permission, RunContext, Skill, as_tool, is_owner
 
 LANGUAGES = {"en": "English", "hi": "Hindi (Hinglish is fine)", "te": "Telugu", "ta": "Tamil"}
@@ -182,8 +182,13 @@ class Agent:
 
     async def complete(self, user_id: str, messages: list[dict], schema: dict | None = None) -> str:
         start, text, tokens = time.perf_counter(), "", 0
-        async for event in llm_stream(self.llms, messages, schema=schema):
-            text, tokens = text + event.text, max(tokens, event.tokens)
+        for first in range(len(self.llms)):  # a reply cut off at a model's output limit goes to the next model
+            text, cut_off = "", False
+            async for event in llm_stream(self.llms[first:], messages, schema=schema):
+                text, tokens, cut_off = text + event.text, max(tokens, event.tokens), cut_off or event.cut_off
+            if not cut_off:
+                break
+            log.warning("reply cut off at the output limit", extra={"provider": self.llms[first].name})
         record("llm", user_id, units=tokens, latency_ms=round((time.perf_counter() - start) * 1000))
         return text
 

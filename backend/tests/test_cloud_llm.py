@@ -460,3 +460,66 @@ def test_nvidia_models_use_the_nvidia_key_and_endpoint(monkeypatch):
     collect(nv, [{"role": "user", "content": "hi"}])
     assert seen == {"url": "https://nv.example.com/v1/chat/completions", "auth": "Bearer nv-key",
                     "model": "nvidia/nemotron-3.5-lightning-30b-a3b"}
+
+
+def test_cloud_marks_a_reply_that_stopped_at_the_output_limit():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse({"choices": [{"delta": {"content": "<html>"}, "finish_reason": "length"}]}))
+
+    events = collect(CloudLLM("m", transport=httpx.MockTransport(handler)), [{"role": "user", "content": "page"}])
+    assert events[-1].cut_off is True
+
+
+def test_live_routing_rests_failed_models_and_prefers_the_fastest(monkeypatch):
+    import app.providers as prov
+    from app.providers import LLMEvent, llm_stream, ranked
+
+    class Model:
+        def __init__(self, name, fail=None):
+            self.name, self.fail, self.calls = name, fail, 0
+
+        async def stream(self, messages, tools=None, schema=None):
+            self.calls += 1
+            if self.fail:
+                raise RuntimeError(self.fail)
+            yield LLMEvent(self.name)
+
+    limited = Model("limited", "429 from limited: Please try again in 1m2.5s")
+    slow, fast, local = Model("slow"), Model("fast"), Model("local")
+
+    async def ask(models):
+        return "".join([e.text async for e in llm_stream(models, [{"role": "user", "content": "hi"}])])
+
+    assert asyncio.run(ask([limited, slow, fast, local])) == "slow"  # the throttled one fails over
+    assert 62 < prov.HEALTH["limited"]["until"] - prov.time.monotonic() <= 62.5  # rests until Groq's reset
+    assert asyncio.run(ask([limited, slow, fast, local])) == "slow" and limited.calls == 1  # not asked again
+    prov.HEALTH["slow"]["speed"], prov.HEALTH["fast"] = 3.0, {"speed": 0.2}
+    assert [m.name for m in ranked([limited, slow, fast, local])] == ["fast", "slow", "limited", "local"]
+
+
+def test_a_forced_tool_call_the_model_refuses_is_answered_in_words_instead():
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        choice = json.loads(request.content)["tool_choice"]
+        sent.append(choice)
+        if choice == "required":
+            return httpx.Response(200, content=sse({"error": {"message": "Tool choice is required, but model did "
+                                                                         "not call a tool", "code": "tool_use_failed"}}))
+        return httpx.Response(200, content=sse({"choices": [{"delta": {"content": "Paris"}}]}))
+
+    tools = [{"type": "function", "function": {"name": "t", "parameters": {"type": "object"}}}]
+    events = collect(CloudLLM("m", transport=httpx.MockTransport(handler)), [{"role": "user", "content": "q"}],
+                     tools=tools, tool_choice="required")
+    assert "".join(e.text for e in events) == "Paris" and sent == ["required", "auto"]
+
+
+def test_a_refused_forced_call_after_some_words_keeps_those_words_as_the_answer():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=sse({"choices": [{"delta": {"content": "Here it is."}}]},
+                                                {"error": {"message": "Tool choice is required, but model did not call a tool"}}))
+
+    tools = [{"type": "function", "function": {"name": "t", "parameters": {"type": "object"}}}]
+    events = collect(CloudLLM("m", transport=httpx.MockTransport(handler)), [{"role": "user", "content": "q"}],
+                     tools=tools, tool_choice="required")
+    assert "".join(e.text for e in events) == "Here it is."  # no error, no second request

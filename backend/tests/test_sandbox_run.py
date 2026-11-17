@@ -145,6 +145,7 @@ def _preview_flow(client):
         # the page gets an origin of its own, so its scripts cannot use the viewer's VoxAgent session
         assert "sandbox allow-scripts" in page.headers["content-security-policy"]
         assert "allow-same-origin" not in page.headers["content-security-policy"]
+        assert page.headers["access-control-allow-origin"] == "*"  # the sandboxed page may load its own files
         assert client.get("/preview/not-a-real-id/").status_code == 404
         assert client.get(f"/preview/{server_id}/.git/config").status_code == 404  # a shared link never leaks .git
         assert client.get(f"/preview/{server_id}/.vox/x").status_code == 404
@@ -337,3 +338,18 @@ def test_preview_picks_how_to_start_a_project(tmp_path):
     assert run_tools.default_run(tmp_path) == "python3 app.py"
     (tmp_path / "package.json").write_text("{}")
     assert run_tools.default_run(tmp_path) == "npm start"
+
+
+def test_a_second_project_gets_its_own_workspace_and_leaves_the_first_alone():
+    def outline(name):
+        return json.dumps({"summary": name, "design": "", "install": "", "run": "", "web": False,
+                           "files": [{"path": "index.html", "purpose": "home page"}]})
+
+    ctx = context(outline("Coffee"), "<h1>Coffee</h1>", outline("Sweets"), "<h1>Sweets</h1>")
+    asyncio.run(run_tools.CreateProject().run(run_tools.ProjectArgs(description="a coffee shop site"), ctx))
+    coffee = base_of(ctx)
+    asyncio.run(run_tools.CreateProject().run(run_tools.ProjectArgs(description="a sweets shop site"), ctx))
+    sweets = base_of(ctx)  # the new project is the one now open
+    assert coffee != sweets
+    assert (coffee / "index.html").read_text() == "<h1>Coffee</h1>\n"
+    assert (sweets / "index.html").read_text() == "<h1>Sweets</h1>\n"

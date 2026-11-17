@@ -12,7 +12,7 @@ const config = {
   rewrites: [
     ...paths.flatMap((p) => [
       { source: p, destination: `${backend}${p}` },
-      { source: `${p}/:rest*`, destination: `${backend}${p}/:rest*` },
+      { source: `${p}/(.*)`, destination: `${backend}${p}/$1` }, // (.*) also keeps a trailing slash, which :rest* drops
     ]),
     { source: '/(.*)', destination: '/index.html' }, // the app's own routes; Vercel serves real files first
   ],

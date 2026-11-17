@@ -322,6 +322,9 @@ async def preview_proxy(server_id: str, path: str, request: Request) -> Response
         raise HTTPException(502, "the app is not answering yet; check its logs") from None
     out = {k.lower(): v for k, v in upstream.headers.items() if k.lower() not in HOP_HEADERS | {"set-cookie"}}
     out["content-security-policy"] = ", ".join(filter(None, [out.get("content-security-policy"), PREVIEW_SANDBOX]))
+    # the sandbox gives the page an origin of "null", so even fetch("data/menu.json") of its own files is
+    # cross-origin; nothing here carries a cookie and the link is shareable, so any origin may read it
+    out.setdefault("access-control-allow-origin", "*")
     return Response(upstream.content, upstream.status_code, out)
 
 

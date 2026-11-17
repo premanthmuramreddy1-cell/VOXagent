@@ -43,3 +43,12 @@ def auth(client):
 @pytest.fixture
 def token(client):
     return signup(client)[1]["access_token"]
+
+
+@pytest.fixture(autouse=True)
+def fresh_model_health():
+    from app.providers import HEALTH
+
+    HEALTH.clear()  # live routing remembers failures; one test's must not reorder the next test's models
+    yield
+    HEALTH.clear()

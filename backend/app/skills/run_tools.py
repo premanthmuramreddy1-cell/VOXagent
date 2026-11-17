@@ -355,7 +355,9 @@ FILE_PROMPT = (
     "markdown fences. "
     "Real content, no placeholders, no lorem ipsum, no TODOs. Match the paths, names and APIs used by the files "
     "already written. Pages must be responsive and accessible (labels, alt text, contrast). A server listens "
-    "on host 0.0.0.0 and the port in the PORT environment variable, never a fixed port."
+    "on host 0.0.0.0 and the port in the PORT environment variable, never a fixed port. Never point at an image "
+    "or file that is not in the project's file list, and never guess an image URL (made-up photo links break): "
+    "draw visuals with CSS gradients, emoji or inline SVG."
 )
 MAX_FILES = 40
 GENERATED = (".venv/", "venv/", "node_modules/", ".git/")  # made by install, never written
@@ -410,6 +412,10 @@ class CreateProject(Tool):
 
     async def act(self, args, ctx, db, space):
         base = wsp.root(space)
+        if any(p.name not in (wsp.NOTES, ".git") for p in base.iterdir()):
+            # the open workspace holds another project: a new one gets its own, or its files mix into that one's
+            space = await wsp.create(db, ctx.user_id, args.description[:50])
+            base = wsp.root(space)
         outline = json.loads(strip_fences(await ctx.complete(
             [{"role": "system", "content": OUTLINE_PROMPT}, {"role": "user", "content": args.description}],
             schema=OUTLINE_SCHEMA)))

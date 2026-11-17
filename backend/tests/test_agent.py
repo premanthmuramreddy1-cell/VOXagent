@@ -444,3 +444,20 @@ def test_submit_it_with_a_filled_form_waiting_offers_only_submit(monkeypatch):
 def test_an_echoed_data_tag_never_reaches_the_user():
     answer, _ = run(Agent([FakeLLM(plan(), "<data>FastAPI is fast.</data>")], {}), Recorder(), text="summarize it")
     assert answer == "FastAPI is fast."
+
+
+def test_a_reply_cut_off_at_the_output_limit_is_written_again_by_the_next_model():
+    from app.providers import LLMEvent
+
+    class Model:
+        def __init__(self, name, text, cut_off):
+            self.name, self.text, self.cut_off, self.calls = name, text, cut_off, 0
+
+        async def stream(self, messages, tools=None, schema=None):
+            self.calls += 1
+            yield LLMEvent(self.text)
+            yield LLMEvent(cut_off=self.cut_off)
+
+    short, full = Model("short", "<html><body>half", True), Model("full", "<html>whole</html>", False)
+    text = asyncio.run(Agent([short, full], {}).complete("u1", [{"role": "user", "content": "write a page"}]))
+    assert text == "<html>whole</html>" and short.calls == 1 and full.calls == 1

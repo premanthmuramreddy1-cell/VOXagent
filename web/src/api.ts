@@ -167,7 +167,9 @@ export class Socket {
       this.handlers.onStatus(false)
       // Run async work in a detached promise so onclose itself returns void (not a Promise).
       void (async () => {
-        if (close.code === 4401) await refresh() // the access token expired
+        // the access token expired; no new one means the session is gone (signed out, account deleted): stop
+        // retrying and show the sign-in screen instead of reconnecting forever
+        if (close.code === 4401 && !(await refresh())) return location.reload()
         setTimeout(() => void this.open(), this.delay)
         this.delay = Math.min(this.delay * 2, 10_000)
       })()

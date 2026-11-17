@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import tempfile
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -40,6 +41,7 @@ class LLMEvent:
     text: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     tokens: int = 0
+    cut_off: bool = False  # the model stopped at its output limit, so the text is incomplete
 
 
 @dataclass
@@ -262,7 +264,7 @@ class CloudLLM:
                         wait = _retry_wait(response.headers.get("retry-after"), wait)
                     else:
                         calls: dict[int, dict[str, str]] = {}
-                        tokens, emitted = 0, False
+                        tokens, emitted, cut_off = 0, False, False
                         async for line in response.aiter_lines():
                             if not line.startswith("data:"):
                                 continue
@@ -272,6 +274,13 @@ class CloudLLM:
                             chunk = json.loads(data)
                             if "error" in chunk:
                                 error = chunk["error"]
+                                if tool_choice == "required" and "did not call a tool" in str(error):
+                                    # forced, but the model chose to answer in words: let it (Groq errors instead).
+                                    # Words already sent are the answer; with none yet, ask again without forcing.
+                                    if not emitted:
+                                        async for evt in self.stream(messages, tools, schema, _plain, tool_choice="auto"):
+                                            yield evt
+                                    return
                                 stray = isinstance(error, dict) and error.get("code") == "tool_use_failed"
                                 if stray and not tools and not emitted and not _plain:
                                     # No tools were offered, yet the model wrote a tool call. Nothing was spoken
@@ -284,6 +293,7 @@ class CloudLLM:
                             usage = chunk.get("usage") or {}
                             tokens = max(tokens, int(usage.get("total_tokens") or 0))
                             for choice in chunk.get("choices") or []:
+                                cut_off = cut_off or choice.get("finish_reason") == "length"
                                 delta = choice.get("delta") or {}
                                 for call in delta.get("tool_calls") or []:
                                     index = call.get("index")
@@ -312,7 +322,7 @@ class CloudLLM:
                                 arguments = {}
                             meta = {k: calls[index][k] for k in ("id", "extra_content") if k in calls[index]}
                             parsed.append(ToolCall(calls[index]["name"], arguments, meta))
-                        yield LLMEvent(tool_calls=parsed, tokens=tokens)
+                        yield LLMEvent(tool_calls=parsed, tokens=tokens, cut_off=cut_off)
                         return
             await asyncio.sleep(wait)
 
@@ -410,26 +420,66 @@ async def first_ok(stage: str, candidates: Sequence[P], call: Callable[[P], Awai
     raise ProviderError(f"all {stage} providers failed")
 
 
+# Live routing: what each model did lately. A model that just failed rests (a rate limit until it resets, a dead key
+# for longer) so every turn does not wait on it again; the ones that work are tried fastest first.
+HEALTH: dict[str, dict[str, float]] = {}  # name -> {"until": monotonic time it rests until, "speed": seconds}
+RETRY_IN_RE = re.compile(r"try again in (?:(\d+)m)?([\d.]+)s", re.I)
+
+
+def _rest_for(exc: Exception) -> float:
+    text = str(exc)
+    if isinstance(exc, TimeoutError):
+        return 60
+    if text.startswith(("401", "403", "404")):  # a key or model that is not allowed will not fix itself soon
+        return 600
+    if text.startswith("429"):
+        wait = RETRY_IN_RE.search(text)
+        return min(300, int(wait.group(1) or 0) * 60 + float(wait.group(2))) if wait else 30
+    return 20
+
+
+def ranked(candidates: Sequence[LLM]) -> list[LLM]:
+    """Rested models first, fastest measured first (config order breaks ties and ranks the unmeasured); the last
+    model (the local one) stays last."""
+    if len(candidates) < 2:
+        return list(candidates)
+    *pool, last = candidates
+    now, order = time.monotonic(), {id(p): i for i, p in enumerate(pool)}
+    seen = {p.name: HEALTH.get(p.name, {}) for p in pool}
+    tired = sorted((p for p in pool if seen[p.name].get("until", 0) > now), key=lambda p: seen[p.name]["until"])
+    ready = sorted((p for p in pool if p not in tired), key=lambda p: (seen[p.name].get("speed", 1e9), order[id(p)]))
+    return [*ready, *tired, last]
+
+
+def _measured(provider: Any, seconds: float) -> None:
+    entry = HEALTH.setdefault(provider.name, {})
+    entry["speed"] = seconds if "speed" not in entry else 0.7 * entry["speed"] + 0.3 * seconds
+    entry["until"] = 0
+
+
 async def llm_stream(
     candidates: Sequence[LLM], messages: list[dict], tools: list[dict] | None = None, schema: dict | None = None,
     force_tool: bool = False,
 ) -> AsyncIterator[LLMEvent]:
-    """Stream from the first LLM that works. Falls back only if nothing was emitted yet.
+    """Stream from the best LLM that works right now (see ranked). Falls back only if nothing was emitted yet.
 
     A provider that is slow to start (cloud models have taken 8-46 s under load) gets llm_first_token_s before the
     next one takes over; the last provider has no deadline, so a local model can still load cold.
     """
+    candidates = ranked(candidates)
     for provider in candidates:
         started = False
         # force_tool: cloud models must call one of the tools; others cannot be forced and keep "auto"
         extra = {"tool_choice": "required"} if force_tool and tools and isinstance(provider, CloudLLM) else {}
         stream = provider.stream(messages, tools, schema, **extra).__aiter__()
+        began = time.monotonic()
         try:
             try:
                 first = (await stream.__anext__() if provider is candidates[-1]
                          else await asyncio.wait_for(stream.__anext__(), settings().llm_first_token_s))
             except StopAsyncIteration:
                 return
+            _measured(provider, time.monotonic() - began)
             started = True
             yield first
             async for event in stream:
@@ -438,6 +488,7 @@ async def llm_stream(
         except Exception as exc:
             _failed("llm", provider, TimeoutError(f"no reply within {settings().llm_first_token_s:g} s")
                     if isinstance(exc, TimeoutError) else exc)
+            HEALTH.setdefault(provider.name, {})["until"] = time.monotonic() + _rest_for(exc)
             await _close(stream)
             if started:
                 break
