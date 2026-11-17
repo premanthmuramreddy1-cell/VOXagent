@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { User } from './api'
-import { api, download, googleSign, logout, refresh, sign } from './api'
+import { api, changePassword, download, googleSign, logout, refresh, sign } from './api'
 import GoogleButton from './GoogleButton'
 import WorkspaceView from './Workspace'
 import Assistant from './Assistant'
@@ -10,6 +10,7 @@ import Swarm from './Swarm'
 import type { Formation } from './swarmEngine'
 import Reviews, { SharedReview } from './Review'
 import {
+  KeyRound,
   MessageSquare,
   FileCode2,
   FolderGit2,
@@ -265,6 +266,23 @@ function Account({ user, onUser }: { user: User; onUser: (user: User | null) => 
     }
   }
 
+  const [pwNote, setPwNote] = useState('')
+
+  async function savePassword(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const formEl = event.currentTarget
+    const form = new FormData(formEl)
+    const next = String(form.get('new'))
+    if (next !== String(form.get('again'))) return setPwNote('The two new passwords do not match.')
+    try {
+      onUser(await changePassword(String(form.get('current')), next))
+      formEl.reset()
+      setPwNote('Password changed. Other devices are signed out.')
+    } catch (e) {
+      setPwNote((e as Error).message)
+    }
+  }
+
   async function remove() {
     if (!confirm('Permanently delete your account and all associated sessions, reviews, and uploads?')) return
     await api('/me', { method: 'DELETE' })
@@ -325,6 +343,22 @@ function Account({ user, onUser }: { user: User; onUser: (user: User | null) => 
               {isSaving ? 'Saving…' : 'Save Changes'}
             </button>
             {note && <span className="font-mono text-xs text-accent" role="status">{note}</span>}
+          </div>
+        </form>
+      </div>
+
+      {/* Password (only for accounts that have one: Google sign-ins never set it) */}
+      <div className="panel p-6">
+        <h2 className="label mb-4 flex items-center gap-2">
+          <KeyRound className="h-3.5 w-3.5" /> Change Password
+        </h2>
+        <form className="grid gap-3 sm:grid-cols-3" onSubmit={savePassword}>
+          <input name="current" type="password" required autoComplete="current-password" className="field h-11" placeholder="Current password" aria-label="Current password" />
+          <input name="new" type="password" required minLength={8} autoComplete="new-password" className="field h-11" placeholder="New password (8+)" aria-label="New password" />
+          <input name="again" type="password" required minLength={8} autoComplete="new-password" className="field h-11" placeholder="New password again" aria-label="New password again" />
+          <div className="flex items-center gap-3 sm:col-span-3">
+            <button className="btn h-10 px-5 text-xs font-semibold">Change password</button>
+            {pwNote && <span className="font-mono text-xs text-muted" role="status">{pwNote}</span>}
           </div>
         </form>
       </div>

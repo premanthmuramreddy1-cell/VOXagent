@@ -177,6 +177,24 @@ def logout(response: Response, vox_refresh: str = Cookie(""), db: Session = Depe
     return {"ok": True}
 
 
+class PasswordChange(BaseModel):
+    current: str = Field(min_length=1, max_length=200)
+    new: str = Field(min_length=8, max_length=200)
+
+
+@router.post("/auth/password", dependencies=[Depends(rate_limit)])
+def change_password(body: PasswordChange, response: Response, user: User = Depends(current_user),
+                    db: Session = Depends(get_db)) -> dict:
+    if not user.password_hash:
+        raise HTTPException(400, "this account signs in with Google, so it has no password to change")
+    if not verify_password(body.current, user.password_hash):  # a stolen access token alone cannot take the account
+        raise HTTPException(403, "your current password is wrong")
+    user.password_hash = hash_password(body.new)
+    db.merge(user)
+    db.execute(delete(RefreshToken).where(RefreshToken.user_id == user.id))  # sign out every other device
+    return _issue(user, db, response)  # this one stays signed in
+
+
 @router.get("/me")
 def me(user: User = Depends(current_user)) -> dict:
     return _profile(user)

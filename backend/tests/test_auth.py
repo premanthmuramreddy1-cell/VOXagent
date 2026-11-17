@@ -191,3 +191,30 @@ def test_rate_limit_forgets_idle_callers(monkeypatch):
     security.rate_limit(_request("127.0.0.1"))
     assert len(_hits) == 1
     _hits.clear()
+
+
+def test_change_password_needs_the_current_one_and_signs_out_other_devices(client):
+    from app.db import SessionLocal, User
+    from app.security import make_access_token
+    headers, body = signup(client)
+    email, other_device = body["user"]["email"], client.cookies["vox_refresh"]
+    wrong = client.post("/auth/password", headers=headers, json={"current": "nope-nope", "new": "brand-new-pass"})
+    assert wrong.status_code == 403
+    assert client.post("/auth/password", headers=headers, json={"current": "password123", "new": "short"}).status_code == 422
+    changed = client.post("/auth/password", headers=headers, json={"current": "password123", "new": "brand-new-pass"})
+    assert changed.status_code == 200 and changed.json()["access_token"]
+    this_device = client.cookies["vox_refresh"]
+    assert client.post("/auth/login", json={"email": email, "password": "password123"}).status_code == 401
+    assert client.post("/auth/login", json={"email": email, "password": "brand-new-pass"}).status_code == 200
+    client.cookies.clear()
+    client.cookies.set("vox_refresh", other_device)
+    assert client.post("/auth/refresh").status_code == 401  # the other device is signed out
+    client.cookies.set("vox_refresh", this_device)
+    assert client.post("/auth/refresh").status_code == 200
+    with SessionLocal() as db:
+        google = User(email="g-only@example.com", password_hash="", name="G")
+        db.add(google)
+        db.commit()
+        gid = google.id
+    g = {"Authorization": f"Bearer {make_access_token(gid)}"}
+    assert client.post("/auth/password", headers=g, json={"current": "x", "new": "whatever-123"}).status_code == 400

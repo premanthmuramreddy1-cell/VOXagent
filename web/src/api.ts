@@ -76,6 +76,13 @@ export async function raw(path: string, init: RequestInit = {}, retry = true): P
 export const post = <T = any>(path: string, body?: unknown) =>
   api<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
 
+/** Change the password; other devices are signed out and this one gets fresh tokens. */
+export async function changePassword(current: string, next: string): Promise<User> {
+  const body = await post('/auth/password', { current, new: next })
+  token = body.access_token
+  return body.user
+}
+
 export async function sign(mode: 'login' | 'signup', email: string, password: string, name: string): Promise<User> {
   const body = await post(`/auth/${mode}`, { email, password, name })
   token = body.access_token
