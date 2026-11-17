@@ -81,7 +81,7 @@ export default function Assistant() {
   }
 
   return (
-    <div className="mx-auto grid w-full max-w-5xl gap-4 px-4 py-6 lg:grid-cols-2">
+    <div className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-4 px-4 py-6 lg:grid-cols-2">
       <h1 className="sr-only">Notes, reminders and memory</h1>
       {status && <p className="rounded-xl border border-line bg-raised px-3 py-2 font-mono text-xs text-muted lg:col-span-2" role="status">{status}</p>}
 
@@ -92,7 +92,7 @@ export default function Assistant() {
 
       <Section icon={Bell} title="Reminders" hint={'Or say "remind me at 9 to call mom"'}>
         <form
-          className="mb-3 grid grid-cols-[1fr_auto_auto] gap-2"
+          className="mb-3 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2"
           onSubmit={async (e) => {
             e.preventDefault()
             const el = e.currentTarget // React clears currentTarget once the handler awaits
