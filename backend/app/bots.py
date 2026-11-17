@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import hmac
 import logging
+import re
 import secrets
 from datetime import timedelta
 from typing import Any
@@ -59,6 +60,19 @@ def linked(platform: str, external_id: str) -> tuple[User, str] | None:
         return (user, row.session_id) if user and row else None
 
 
+FENCE = re.compile(r"^[ \t]*```[\w+-]*[ \t]*(?:\n|$)", re.M)
+HEADING = re.compile(r"^\s*#{1,6}\s+", re.M)
+BULLET = re.compile(r"^(\s*)[-*]\s+", re.M)
+LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)")
+EMPHASIS = re.compile(r"\*\*|`|(?<![\w*])\*(?=\S)|(?<=\S)\*(?![\w*])")
+
+
+def for_chat(text: str) -> str:
+    """Replies are written in Markdown for the web app; chat apps get it as plain text (no parse mode is set)."""
+    text = LINK.sub(r"\1 (\2)", FENCE.sub("", text))
+    return EMPHASIS.sub("", BULLET.sub(r"\1• ", HEADING.sub("", text)))
+
+
 async def to_pcm(audio: bytes) -> bytes:
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-f", "s16le", "-ac", "1", "-ar", "16000", "pipe:1",
@@ -82,7 +96,7 @@ class BotChannel:
         elif type in ("answer.done", "clarify"):
             text = payload.get("text") or payload.get("question") or self.answer
             if text.strip():
-                await self.reply(text.strip())
+                await self.reply(for_chat(text).strip())
             self.answer = ""
         elif type == "server.started":
             await self.reply(f"Preview: {payload.get('url')}")

@@ -390,3 +390,9 @@ def test_delete_account_removes_error_rows_and_live_chats(client):
     assert chat not in ws._channels
     with SessionLocal() as db:
         assert db.query(ErrorEvent).filter(ErrorEvent.user_id == uid).count() == 0
+
+
+def test_bot_replies_drop_markdown_symbols():
+    from app.bots import for_chat
+    md = "## Fruits\n- **Apple**\n* `pear`\n\n```python\nprint(2 * 3)\n```\nSee [docs](https://x.dev)."
+    assert for_chat(md) == "Fruits\n• Apple\n• pear\n\nprint(2 * 3)\nSee docs (https://x.dev)."
