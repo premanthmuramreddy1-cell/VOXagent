@@ -7,13 +7,14 @@ from datetime import timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app import providers as prov
 from app.agent import Agent
 from app.config import settings
-from app.db import (Activity, ChatSession, ErrorEvent, Message, Review, Upload, UsageEvent, User, get_db, now)
+from app.db import (Activity, BotLink, ChatSession, ErrorEvent, Message, Review, Upload, UsageEvent, User, get_db, now)
 from app.security import admin_user, current_user, sha256
 from app.skills import RunContext, discover
 from app.skills.code_review import Args, skill, to_markdown
@@ -40,6 +41,41 @@ def create_session(user: User = Depends(current_user), db: Session = Depends(get
 def list_sessions(user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
     rows = db.scalars(select(ChatSession).where(ChatSession.user_id == user.id).order_by(ChatSession.created_at.desc()))
     return [{"id": c.id, "title": c.title, "created_at": c.created_at.isoformat()} for c in rows]
+
+
+class SessionPatch(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
+
+
+@router.patch("/sessions/{session_id}")
+def rename_session(session_id: str, body: SessionPatch, user: User = Depends(current_user),
+                   db: Session = Depends(get_db)) -> dict:
+    chat = _owned(db, ChatSession, session_id, user)
+    title = " ".join(body.title.split())
+    if not title:
+        raise HTTPException(422, "Give the session a name.")
+    chat.title = title
+    db.commit()
+    return {"id": chat.id, "title": chat.title}
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+def delete_session(session_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> Response:
+    from app.api import ws  # late import: ws imports the agent stack
+
+    chat = _owned(db, ChatSession, session_id, user)
+    if channel := ws._channels.pop(session_id, None):
+        channel.cancel_turn()
+    for link in db.scalars(select(BotLink).where(BotLink.session_id == session_id)):
+        fresh = ChatSession(user_id=user.id, title=f"{link.platform.title()} chat")  # the bot keeps working
+        db.add(fresh)
+        db.flush()
+        link.session_id = fresh.id
+    db.execute(delete(Message).where(Message.session_id == session_id))
+    db.execute(delete(Activity).where(Activity.session_id == session_id))
+    db.delete(chat)
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/sessions/{session_id}/messages")

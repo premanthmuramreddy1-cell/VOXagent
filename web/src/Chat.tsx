@@ -28,6 +28,8 @@ import {
   ExternalLink,
   PanelLeft,
   MessageSquare,
+  Pencil,
+  Trash2,
 } from 'lucide-react'
 
 type Step = { text: string; skill: string; done: boolean }
@@ -454,6 +456,8 @@ function Bubble({ item }: { item: Item }) {
 
 export default function Chat() {
   const [sessions, setSessions] = useState<Session[]>([])
+  const [editing, setEditing] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
   const [current, setCurrent] = useState('')
   const [items, setItems] = useState<Item[]>([])
   const [text, setText] = useState('')
@@ -674,6 +678,33 @@ export default function Chat() {
     openSession(created.id)
   }
 
+  async function renameSession(id: string, title: string) {
+    setEditing(null)
+    const name = title.trim()
+    if (!name || name === sessions.find((s) => s.id === id)?.title) return
+    try {
+      const saved = await api<Session>(`/sessions/${id}`, { method: 'PATCH', body: JSON.stringify({ title: name }) })
+      setSessions((list) => list.map((s) => (s.id === id ? { ...s, title: saved.title } : s)))
+    } catch (e) {
+      setError({ message: (e as Error).message })
+    }
+  }
+
+  async function deleteSession(id: string) {
+    setDeleting(null)
+    try {
+      await api(`/sessions/${id}`, { method: 'DELETE' })
+    } catch (e) {
+      setError({ message: (e as Error).message })
+      return
+    }
+    const rest = sessions.filter((s) => s.id !== id)
+    setSessions(rest)
+    if (id !== current) return
+    if (rest.length) openSession(rest[0].id)
+    else await createSession()
+  }
+
   const currentSession = sessions.find((s) => s.id === current)
 
   return (
@@ -706,20 +737,65 @@ export default function Chat() {
 
           {sessions.map((s) => {
             const isActive = s.id === current
+            const action =
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-raised-hover hover:text-ink [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11'
             return (
-              <button
+              <div
                 key={s.id}
-                onClick={() => openSession(s.id)}
-                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left font-mono text-xs transition-colors ${
+                className={`group flex items-center rounded-xl font-mono text-xs transition-colors ${
                   isActive
                     ? 'border border-line bg-raised font-semibold text-ink shadow-xs'
                     : 'border border-transparent text-muted hover:bg-raised/60 hover:text-ink'
                 }`}
-                title={s.title}
               >
-                <MessageSquare className={`h-3.5 w-3.5 shrink-0 ${isActive ? 'text-accent' : 'text-muted'}`} />
-                <span className="truncate flex-1">{s.title}</span>
-              </button>
+                {editing === s.id ? (
+                  <input
+                    autoFocus
+                    aria-label="Session name"
+                    maxLength={80}
+                    defaultValue={s.title}
+                    className="field m-1 h-8 min-w-0 flex-1 px-2 font-mono text-xs"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.currentTarget.blur()
+                      if (e.key === 'Escape') setEditing(null)
+                    }}
+                    onBlur={(e) => editing === s.id && renameSession(s.id, e.currentTarget.value)}
+                  />
+                ) : (
+                  <button
+                    onClick={() => openSession(s.id)}
+                    className="flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left"
+                    title={s.title}
+                  >
+                    <MessageSquare className={`h-3.5 w-3.5 shrink-0 ${isActive ? 'text-accent' : 'text-muted'}`} />
+                    <span className="truncate flex-1">{s.title}</span>
+                  </button>
+                )}
+                {deleting === s.id ? (
+                  <div className="flex shrink-0 items-center gap-0.5 pr-1">
+                    <button
+                      onClick={() => deleteSession(s.id)}
+                      className="rounded-lg px-2 py-1 font-semibold text-danger hover:bg-danger-subtle [@media(pointer:coarse)]:min-h-11"
+                    >
+                      Delete
+                    </button>
+                    <button onClick={() => setDeleting(null)} className={action} aria-label="Keep this session">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  editing !== s.id && (
+                    <div className="flex shrink-0 items-center gap-0.5 pr-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+                      <button onClick={() => setEditing(s.id)} className={action} aria-label={`Rename ${s.title}`}>
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button onClick={() => setDeleting(s.id)} className={action} aria-label={`Delete ${s.title}`}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )
+                )}
+              </div>
             )
           })}
         </div>
