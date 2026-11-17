@@ -28,6 +28,7 @@ export default function Assistant() {
   const [memories, setMemories] = useState<Memory[]>([])
   const [notes, setNotes] = useState<Note[]>([])
   const [reminders, setReminders] = useState<Reminder[]>([])
+  const [changing, setChanging] = useState<Reminder | null>(null) // the reminder the form above is editing
   const [briefing, setBriefing] = useState('')
   const [profile, setProfile] = useState<[string, string][]>([])
   const [query, setQuery] = useState('')
@@ -128,27 +129,38 @@ export default function Assistant() {
 
       <Section icon={Bell} title="Reminders" hint={'Or say "remind me at 9 to call mom"'}>
         <form
+          key={changing?.id ?? 'new'}
           className="mb-3 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2"
           onSubmit={async (e) => {
             e.preventDefault()
             const el = e.currentTarget // React clears currentTarget once the handler awaits
             const form = new FormData(el)
             try {
-              await post('/reminders', { text: form.get('text'), when: form.get('when'), repeat: form.get('repeat') })
+              const body = { text: form.get('text'), when: form.get('when'), repeat: form.get('repeat') }
+              if (changing) await api(`/reminders/${changing.id}`, { method: 'PUT', body: JSON.stringify(body) })
+              else await post('/reminders', body)
               el.reset()
+              setChanging(null)
               load()
             } catch (err) {
               fail(err)
             }
           }}
         >
-          <input name="text" required className="field col-span-3" placeholder="What" aria-label="Reminder text" />
-          <input name="when" required type="datetime-local" className="field min-w-0" aria-label="When" />
-          <select name="repeat" className="field" aria-label="Repeat">
+          <input name="text" required className="field col-span-3" placeholder="What" aria-label="Reminder text" defaultValue={changing?.text} />
+          <input name="when" required type="datetime-local" className="field min-w-0" aria-label="When" defaultValue={changing?.due.slice(0, 16)} />
+          <select name="repeat" className="field" aria-label="Repeat" defaultValue={changing?.repeat ?? ''}>
             <option value="">Once</option><option value="daily">Daily</option>
             <option value="weekdays">Weekdays</option><option value="weekly">Weekly</option>
           </select>
-          <button className="btn btn-accent" aria-label="Add reminder"><Plus className="h-3.5 w-3.5" /></button>
+          {changing ? (
+            <div className="col-span-3 flex gap-2">
+              <button className="btn btn-accent">Save reminder</button>
+              <button type="button" className="btn" onClick={() => setChanging(null)}>Cancel</button>
+            </div>
+          ) : (
+            <button className="btn btn-accent" aria-label="Add reminder"><Plus className="h-3.5 w-3.5" /></button>
+          )}
         </form>
         <ul className="divide-y divide-line text-sm">
           {reminders.length === 0 && <li className="py-2 text-muted">Nothing scheduled.</li>}
@@ -166,6 +178,7 @@ export default function Assistant() {
               {!r.repeat && (
                 <button className="btn-ghost min-h-8 px-2" title="Snooze 1 hour" aria-label={`Snooze ${r.text} for 1 hour`} onClick={() => post(`/reminders/${r.id}/snooze`, { minutes: 60 }).then(load).catch(fail)}><AlarmClockPlus className="h-3.5 w-3.5" /></button>
               )}
+              <button className="btn-ghost min-h-8 px-2" title="Edit" aria-label={`Edit ${r.text}`} onClick={() => setChanging(r)}><Pencil className="h-3.5 w-3.5" /></button>
               <button className="btn-ghost min-h-8 px-2" title={r.repeat ? 'Done for this time' : 'Done'} aria-label={`Mark ${r.text} done`} onClick={() => post(`/reminders/${r.id}/done`).then(load).catch(fail)}><Check className="h-3.5 w-3.5" /></button>
               <button
                 className="btn-ghost min-h-8 px-2"

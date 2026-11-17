@@ -456,3 +456,14 @@ def test_assistant_done_keeps_a_series_and_cancel_ends_it():
     assert run(pt.CompleteReminder(), uid, about="pills", cancel=True).summary == "Cancelled: evening pills."
     with SessionLocal() as db:
         assert db.get(Reminder, rid).done
+
+
+def test_edit_reminder_changes_text_time_and_repeat_only_for_its_owner(client):
+    headers, _ = signup(client)
+    row = client.post("/reminders", headers=headers, json={"text": "call", "when": "2099-01-05T10:00"}).json()
+    body = {"text": "  call mom ", "when": "2099-02-01T18:30", "repeat": "weekly"}
+    edited = client.put(f"/reminders/{row['id']}", headers=headers, json=body).json()
+    assert edited["text"] == "call mom" and edited["due"].startswith("2099-02-01T18:30") and edited["repeat"] == "weekly"
+    assert client.put(f"/reminders/{row['id']}", headers=headers, json={**body, "when": "soon"}).status_code == 422
+    stranger, _ = signup(client)
+    assert client.put(f"/reminders/{row['id']}", headers=stranger, json=body).status_code == 404

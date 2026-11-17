@@ -189,6 +189,19 @@ def add_reminder(body: ReminderBody, user: User = Depends(current_user), db: Ses
     return _reminder(row, db)
 
 
+@router.put("/reminders/{reminder_id}")
+def edit_reminder(reminder_id: str, body: ReminderBody, user: User = Depends(current_user),
+                  db: Session = Depends(get_db)) -> dict:
+    row = _own(db, Reminder, reminder_id, user)
+    try:
+        row.due_at = personal.to_utc(body.when, personal.zone(db, user.id))
+    except ValueError:
+        raise HTTPException(422, "use a date and time like 2026-11-16T09:00") from None
+    row.text, row.repeat = body.text.strip(), body.repeat
+    db.commit()
+    return _reminder(row, db)
+
+
 @router.post("/reminders/{reminder_id}/done")
 def finish_reminder(reminder_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
     row = _own(db, Reminder, reminder_id, user)
