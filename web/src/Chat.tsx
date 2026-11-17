@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ServerEvent } from './api'
 import { api, post, Socket, upload } from './api'
+import { parse, type Inline } from './markdown'
 import { Mic, Player } from './audio'
 import { setSwarmMood } from './swarmEngine'
 import { BuildCard, NewsDeck } from './BotDeck'
@@ -155,6 +156,65 @@ const QUICK = [
 ] as const
 
 type Session = { id: string; title: string }
+
+function Spans({ nodes }: { nodes: Inline[] }) {
+  return nodes.map((n, i) => {
+    if (n.t === 'text') return <Fragment key={i}>{n.v}</Fragment>
+    if (n.t === 'code')
+      return (
+        <code key={i} className="rounded border border-line bg-surface px-1 font-mono text-[12px]">
+          {n.v}
+        </code>
+      )
+    if (n.t === 'a')
+      return (
+        <a key={i} href={n.href} target="_blank" rel="noopener noreferrer" className="text-accent underline underline-offset-2 hover:text-accent-hover">
+          <Spans nodes={n.c} />
+        </a>
+      )
+    const Tag = n.t === 'b' ? 'strong' : 'em'
+    return (
+      <Tag key={i} className={n.t === 'b' ? 'font-semibold' : undefined}>
+        <Spans nodes={n.c} />
+      </Tag>
+    )
+  })
+}
+
+/** An assistant reply with its Markdown drawn: lists, code, links and emphasis instead of raw symbols. */
+function Rich({ text }: { text: string }) {
+  const blocks = useMemo(() => parse(text), [text])
+  return blocks.map((b, i) => {
+    if (b.t === 'p')
+      return (
+        <p key={i} className="whitespace-pre-wrap">
+          <Spans nodes={b.c} />
+        </p>
+      )
+    if (b.t === 'h')
+      return (
+        <h3 key={i} className={`font-semibold ${b.level === 1 ? 'text-base' : 'text-sm'}`}>
+          <Spans nodes={b.c} />
+        </h3>
+      )
+    if (b.t === 'pre')
+      return (
+        <pre key={i} className="overflow-x-auto rounded-lg border border-line bg-surface p-3 font-mono text-[12px] leading-snug">
+          <code>{b.v}</code>
+        </pre>
+      )
+    const items = b.items.map((it, j) => (
+      <li key={j}>
+        <Spans nodes={it} />
+      </li>
+    ))
+    return b.t === 'ul' ? (
+      <ul key={i} className="list-disc space-y-1 pl-5">{items}</ul>
+    ) : (
+      <ol key={i} start={b.start} className="list-decimal space-y-1 pl-5">{items}</ol>
+    )
+  })
+}
 type Confirm = { id: string; skill: string; permission: string }
 
 /** Fold one server event into the message list. */
@@ -430,12 +490,12 @@ function Bubble({ item }: { item: Item }) {
         {/* Text Answer */}
         {(item.text || item.live) && (
           <div className="relative rounded-2xl rounded-tl-xs border border-line/50 bg-raised py-3 pl-4 pr-12">
-            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">
-              {item.text}
+            <div className="space-y-2 break-words text-sm leading-relaxed text-ink">
+              <Rich text={item.text} />
               {item.live && (
                 <span className="ml-1 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-middle" />
               )}
-            </p>
+            </div>
 
             {item.text && !item.live && (
               <button
