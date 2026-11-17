@@ -107,6 +107,18 @@ def next_due(reminder: Reminder, tz: ZoneInfo) -> datetime | None:
     return local.astimezone(UTC).replace(tzinfo=None)
 
 
+def complete(reminder: Reminder, tz: ZoneInfo) -> None:
+    """Done for this time: a repeating reminder moves to its next time after now, a one-off finishes."""
+    following = next_due(reminder, tz)
+    while following and following <= now():
+        reminder.due_at = following
+        following = next_due(reminder, tz)
+    if following:
+        reminder.due_at = following
+    else:
+        reminder.done = True
+
+
 def due_reminders(db: Session) -> list[Reminder]:
     return list(db.scalars(select(Reminder).where(Reminder.done.is_(False), Reminder.due_at <= now())))
 

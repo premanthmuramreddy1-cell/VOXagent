@@ -192,15 +192,7 @@ def add_reminder(body: ReminderBody, user: User = Depends(current_user), db: Ses
 @router.post("/reminders/{reminder_id}/done")
 def finish_reminder(reminder_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
     row = _own(db, Reminder, reminder_id, user)
-    tz = personal.zone(db, user.id)
-    following = personal.next_due(row, tz)
-    while following and following <= now():  # done today: a repeating reminder moves to its next time, not off
-        row.due_at = following
-        following = personal.next_due(row, tz)
-    if following:
-        row.due_at = following
-    else:
-        row.done = True
+    personal.complete(row, personal.zone(db, user.id))
     db.commit()
     return {"ok": True, "reminder": None if row.done else _reminder(row, db)}
 

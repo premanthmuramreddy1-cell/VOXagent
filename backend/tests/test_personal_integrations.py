@@ -440,3 +440,19 @@ def test_overdue_repeating_reminder_done_skips_to_the_next_future_time():
     with SessionLocal() as db:
         finish_reminder(rid, db.get(User, uid), db)
         assert db.get(Reminder, rid).due_at > datetime.now() and not db.get(Reminder, rid).done
+
+
+def test_assistant_done_keeps_a_series_and_cancel_ends_it():
+    uid = user_id()
+    with SessionLocal() as db:
+        row = Reminder(user_id=uid, text="evening pills", due_at=datetime(2099, 1, 5, 14, 0), repeat="daily")
+        db.add(row)
+        db.commit()
+        rid = row.id
+    done = run(pt.CompleteReminder(), uid, about="pills")
+    assert done.summary.startswith("Done for now: evening pills. Next time is")
+    with SessionLocal() as db:
+        assert db.get(Reminder, rid).due_at == datetime(2099, 1, 6, 14, 0) and not db.get(Reminder, rid).done
+    assert run(pt.CompleteReminder(), uid, about="pills", cancel=True).summary == "Cancelled: evening pills."
+    with SessionLocal() as db:
+        assert db.get(Reminder, rid).done

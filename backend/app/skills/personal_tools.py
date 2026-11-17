@@ -166,6 +166,8 @@ class ListReminders:
 
 class DoneArgs(BaseModel):
     about: str = Field(description="Words identifying the reminder to cancel or mark done.")
+    cancel: bool = Field(default=False, description="True to stop the reminder for good (\"cancel\", \"delete\", "
+                         "\"stop reminding me\"); false when the user did it this time (a repeating one comes back).")
 
 
 class CompleteReminder:
@@ -178,9 +180,15 @@ class CompleteReminder:
                                                    Reminder.text.ilike(f"%{args.about.strip()}%")))
             if not row:
                 return SkillResult("I couldn't find that reminder.", {})
-            row.done = True
+            if args.cancel:
+                row.done = True
+            else:
+                personal.complete(row, personal.zone(db, ctx.user_id))
             db.commit()
-        return SkillResult(f"Done: {row.text}.", {"id": row.id})
+            if args.cancel or row.done:
+                return SkillResult(f"{'Cancelled' if args.cancel else 'Done'}: {row.text}.", {"id": row.id})
+            when = personal.to_local(row.due_at, personal.zone(db, ctx.user_id))
+        return SkillResult(f"Done for now: {row.text}. Next time is {when:%A %-d %B at %H:%M}.", {"id": row.id})
 
 
 class Briefing:
