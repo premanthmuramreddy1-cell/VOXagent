@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app import life, personal, push
 from app.crypto import load_secret, save_secret
-from app.db import ListItem, Memory, Note, PushSubscription, Reminder, User, get_db, now
+from app.db import Habit, ListItem, Memory, Note, PushSubscription, Reminder, User, get_db, now
 from app.security import current_user
 
 router = APIRouter()
@@ -187,6 +187,58 @@ def add_list_item(body: ListItemBody, user: User = Depends(current_user), db: Se
 @router.delete("/lists/items/{item_id}")
 def remove_list_item(item_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
     db.delete(_own(db, ListItem, item_id, user))
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- habits (the same ones the assistant tracks by voice)
+
+class HabitBody(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    target: int = Field(default=1, ge=1, le=100)
+    unit: str = Field(default="time", max_length=20)
+
+
+class HabitLog(BaseModel):
+    count: int = Field(ge=-20, le=100)
+
+
+def _habit(h: Habit, db: Session) -> dict:
+    today = personal.local_now(db, h.user_id).date()
+    return {"id": h.id, "name": h.name, "target": h.target, "unit": h.unit, "times": h.times or [],
+            "done": life.done_on(h, today), "streak": life.streak(h, today)}
+
+
+@router.get("/habits")
+def list_habits(user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
+    return [_habit(h, db) for h in db.scalars(select(Habit).where(Habit.user_id == user.id).order_by(Habit.name))]
+
+
+@router.post("/habits")
+def add_habit(body: HabitBody, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    name = " ".join(body.name.split())
+    if not name:
+        raise HTTPException(422, "Give the habit a name.")
+    row = life.find_habit(db, user.id, name)  # same name as one already tracked: update it, like the voice tool
+    if row is None or row.name.lower() != name.lower():
+        row = Habit(user_id=user.id, name=name)
+        db.add(row)
+    row.target, row.unit = body.target, body.unit.strip() or "time"
+    db.commit()
+    return _habit(row, db)
+
+
+@router.post("/habits/{habit_id}/log")
+def log_habit(habit_id: str, body: HabitLog, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    row = _own(db, Habit, habit_id, user)
+    life.log_habit(row, personal.local_now(db, user.id).date(), body.count)
+    db.commit()
+    return _habit(row, db)
+
+
+@router.delete("/habits/{habit_id}")
+def remove_habit(habit_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    db.delete(_own(db, Habit, habit_id, user))
     db.commit()
     return {"ok": True}
 

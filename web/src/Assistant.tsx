@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlarmClockPlus, Bell, Brain, Check, ClipboardList, ListChecks, NotebookPen, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { AlarmClockPlus, Bell, Brain, Check, ClipboardList, Flame, ListChecks, Minus, NotebookPen, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { api, post } from './api'
 
 type Memory = { id: string; kind: string; text: string }
 type Note = { id: string; text: string; tags: string[]; created_at: string }
+type Habit = { id: string; name: string; target: number; unit: string; times: string[]; done: number; streak: number }
 type Reminder = { id: string; text: string; due: string; repeat: string }
 
 function Section({ icon: Icon, title, hint, children }: { icon: typeof Brain; title: string; hint: string; children: React.ReactNode }) {
@@ -36,14 +37,16 @@ export default function Assistant() {
   const [draft, setDraft] = useState<{ id: string | null; text: string } | null>(null) // id null: a new note
   const [status, setStatus] = useState('')
   const [lists, setLists] = useState<Record<string, { id: string; text: string }[]>>({})
+  const [habits, setHabits] = useState<Habit[]>([])
 
   const fail = (e: unknown) => setStatus((e as Error).message)
   const load = useCallback(async () => {
-    const [m, n, r, b, p, l] = await Promise.all([
+    const [m, n, r, b, p, l, h] = await Promise.all([
       api<Memory[]>('/memory'), api<Note[]>('/notes'), api<Reminder[]>('/reminders'),
-      api<{ text: string }>('/reminders/briefing'), api<Record<string, string>>('/me/profile'), api('/lists'),
+      api<{ text: string }>('/reminders/briefing'), api<Record<string, string>>('/me/profile'), api('/lists'), api<Habit[]>('/habits'),
     ])
     setLists(l)
+    setHabits(h)
     setMemories(m)
     setNotes(n)
     setReminders(r)
@@ -127,6 +130,50 @@ export default function Assistant() {
       <Section icon={ClipboardList} title="Today" hint="Spoken each morning as a push">
         <p className="text-sm leading-relaxed">{briefing || '…'}</p>
         <button className="btn mt-3" onClick={enablePush}><Bell className="h-3.5 w-3.5" /> Turn on notifications</button>
+      </Section>
+
+      <Section icon={Flame} title="Habits" hint={'Or say "I drank 2 glasses of water"'}>
+        <form
+          className="mb-3 grid grid-cols-[minmax(0,1fr)_4.5rem_minmax(0,6rem)_auto] gap-2"
+          onSubmit={async (e) => {
+            e.preventDefault()
+            const el = e.currentTarget
+            const form = new FormData(el)
+            try {
+              await post('/habits', { name: form.get('name'), target: Number(form.get('target')), unit: form.get('unit') || 'time' })
+              el.reset()
+              load()
+            } catch (err) {
+              fail(err)
+            }
+          }}
+        >
+          <input name="name" required className="field min-w-0" placeholder="Water" aria-label="Habit name" />
+          <input name="target" type="number" min={1} max={100} defaultValue={1} className="field min-w-0" aria-label="Times a day" />
+          <input name="unit" className="field min-w-0" placeholder="glass" aria-label="Unit" />
+          <button className="btn btn-accent" aria-label="Track habit"><Plus className="h-3.5 w-3.5" /></button>
+        </form>
+        <ul className="divide-y divide-line text-sm">
+          {habits.length === 0 && <li className="py-2 text-muted">No habits yet.</li>}
+          {habits.map((h) => {
+            const met = h.done >= h.target
+            const log = (count: number) => post(`/habits/${h.id}/log`, { count }).then(load).catch(fail)
+            return (
+              <li key={h.id} className="flex items-center gap-2 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate">{h.name}{h.streak > 1 && <span className="ml-2 label">{h.streak}-day streak</span>}</p>
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-line/60" role="progressbar" aria-label={`${h.name} today`} aria-valuenow={h.done} aria-valuemin={0} aria-valuemax={h.target}>
+                    <div className={`h-full ${met ? 'bg-ok' : 'bg-accent'}`} style={{ width: `${Math.min(100, (h.done / h.target) * 100)}%` }} />
+                  </div>
+                </div>
+                <span className={`w-14 shrink-0 text-right font-mono text-xs ${met ? 'text-ok' : 'text-muted'}`}>{h.done}/{h.target}</span>
+                <button className="btn-ghost min-h-8 px-2" aria-label={`Undo one ${h.name}`} title="Undo one" disabled={!h.done} onClick={() => log(-1)}><Minus className="h-3.5 w-3.5" /></button>
+                <button className="btn-ghost min-h-8 px-2" aria-label={`Log one ${h.name}`} title={`Log one ${h.unit}`} onClick={() => log(1)}><Plus className="h-3.5 w-3.5" /></button>
+                <button className="btn-ghost min-h-8 px-2" aria-label={`Stop tracking ${h.name}`} title="Stop tracking" onClick={() => confirm(`Stop tracking ${h.name}? Its history goes too.`) && api(`/habits/${h.id}`, { method: 'DELETE' }).then(load).catch(fail)}><Trash2 className="h-3.5 w-3.5" /></button>
+              </li>
+            )
+          })}
+        </ul>
       </Section>
 
       <Section icon={ListChecks} title="Lists" hint={'Or say "add milk and eggs to my grocery list"'}>

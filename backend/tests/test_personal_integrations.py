@@ -483,3 +483,21 @@ def test_lists_page_adds_without_duplicates_groups_by_list_and_ticks_off(client)
     assert client.delete(f"/lists/items/{milk['id']}", headers=stranger).status_code == 404
     assert client.delete(f"/lists/items/{milk['id']}", headers=headers).json() == {"ok": True}
     assert "groceries" not in client.get("/lists", headers=headers).json()
+
+
+def test_habits_page_tracks_logs_corrects_and_removes(client):
+    headers, _ = signup(client)
+    water = client.post("/habits", headers=headers, json={"name": " Water ", "target": 3, "unit": "glass"}).json()
+    assert (water["name"], water["target"], water["done"], water["streak"]) == ("Water", 3, 0, 0)
+    same = client.post("/habits", headers=headers, json={"name": "water", "target": 8, "unit": "glass"}).json()
+    assert same["id"] == water["id"] and same["target"] == 8  # same habit updated, not a second one
+    for _ in range(8):
+        logged = client.post(f"/habits/{water['id']}/log", headers=headers, json={"count": 1}).json()
+    assert (logged["done"], logged["streak"]) == (8, 1)
+    fixed = client.post(f"/habits/{water['id']}/log", headers=headers, json={"count": -20}).json()
+    assert fixed["done"] == 0  # a correction never goes below zero
+    assert [h["name"] for h in client.get("/habits", headers=headers).json()] == ["Water"]
+    stranger, _ = signup(client)
+    assert client.post(f"/habits/{water['id']}/log", headers=stranger, json={"count": 1}).status_code == 404
+    assert client.delete(f"/habits/{water['id']}", headers=headers).json() == {"ok": True}
+    assert client.get("/habits", headers=headers).json() == []
