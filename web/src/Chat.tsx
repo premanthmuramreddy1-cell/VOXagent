@@ -33,6 +33,7 @@ import {
   Trash2,
   Search,
   Download,
+  ArrowDown,
 } from 'lucide-react'
 
 type Step = { text: string; skill: string; done: boolean }
@@ -560,6 +561,9 @@ export default function Chat() {
   const mic = useRef<Mic | null>(null)
   const speakRef = useRef(speak)
   const bottom = useRef<HTMLDivElement>(null)
+  const lastSent = useRef<{ message: string; uploads: string[] } | null>(null)
+  const resend = useRef(() => {})
+  const [pinned, setPinned] = useState(true) // follow new text only while the reader is at the bottom
 
   useEffect(() => {
     speakRef.current = speak
@@ -572,6 +576,7 @@ export default function Chat() {
     setItems([])
     setConfirm(null)
     setBusy(false)
+    setPinned(true)
     setCurrent(id)
   }
 
@@ -604,7 +609,8 @@ export default function Chat() {
       onEvent: (event) => {
         if (event.type === 'confirm.request') return setConfirm(event as unknown as Confirm)
         if (event.type === 'error') {
-          setError({ message: event.message })
+          // a retryable failure (a busy model, a dropped provider) offers to ask the same thing again
+          setError({ message: event.message, retry: event.retryable && lastSent.current ? () => resend.current() : undefined })
           return setBusy(false)
         }
         if (event.type === 'turn.started') setBusy(true)
@@ -629,16 +635,22 @@ export default function Chat() {
   }, [current])
 
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: 'end' })
-  }, [items, confirm])
+    if (pinned) bottom.current?.scrollIntoView({ block: 'end' })
+  }, [items, confirm, pinned])
+
+  useEffect(() => {
+    resend.current = () => lastSent.current && send(lastSent.current.message, lastSent.current.uploads) // latest speak setting
+  })
 
   function send(message: string, uploads: string[]) {
+    lastSent.current = { message, uploads }
     const ok = socket.current?.send({ type: 'text.input', text: message, upload_ids: uploads, speak })
     if (!ok) return setError({ message: 'Offline. Reconnecting…', retry: () => send(message, uploads) })
     player.current.stop()
     setError(null)
     setBusy(true)
     setItems((list) => [...list, { role: 'user', text: message }])
+    setPinned(true)
     // the server names a new session after its first message; show that name now, not after a reload
     setSessions((list) => list.map((s) => (s.id === current && s.title === 'New session' && message ? { ...s, title: message.slice(0, 60) } : s)))
     setText('')
@@ -1006,7 +1018,14 @@ export default function Chat() {
         {/* Scrollable Messages Stream */}
         {/* The bots' stage: the whole conversation area, with the chat column centred over it. */}
         <div aria-hidden="true" className="pointer-events-none absolute inset-x-0 top-12 bottom-0" data-swarm-stage />
-        <div className="chat-rail chat-fade flex-1 overflow-y-auto px-4 sm:px-6 py-6" aria-live="polite">
+        <div
+          className="chat-rail chat-fade flex-1 overflow-y-auto px-4 sm:px-6 py-6"
+          aria-live="polite"
+          onScroll={(e) => {
+            const el = e.currentTarget
+            setPinned(el.scrollHeight - el.scrollTop - el.clientHeight < 80)
+          }}
+        >
           <div className="max-w-2xl mx-auto space-y-6">
             {items.length === 0 && (
               <div className="my-auto flex flex-col items-center justify-center pb-10 text-center">
@@ -1085,6 +1104,16 @@ export default function Chat() {
             <div ref={bottom} />
           </div>
         </div>
+        {!pinned && items.length > 0 && (
+          <div className="pointer-events-none relative h-0">
+            <button
+              onClick={() => setPinned(true)}
+              className="pointer-events-auto absolute bottom-3 left-1/2 flex min-h-9 -translate-x-1/2 items-center gap-1.5 rounded-full border border-line bg-raised px-3 font-mono text-[11px] text-ink shadow-md transition-colors hover:border-accent [@media(pointer:coarse)]:min-h-11"
+            >
+              <ArrowDown className="h-3.5 w-3.5" /> Jump to latest
+            </button>
+          </div>
+        )}
 
         {/* Bottom Error Alert (if present) */}
         {error && (
