@@ -172,6 +172,13 @@ def export_review(review_id: str, user: User = Depends(current_user), db: Sessio
     return Response(to_markdown(review), media_type="text/markdown", headers=headers)
 
 
+@router.delete("/reviews/{review_id}", status_code=204)
+def delete_review(review_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> Response:
+    db.delete(_owned(db, Review, review_id, user))  # its share link stops working; the day's usage still counts
+    db.commit()
+    return Response(status_code=204)
+
+
 @router.post("/reviews/{review_id}/share")
 def share_review(review_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
     review = _owned(db, Review, review_id, user)

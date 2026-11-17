@@ -69,6 +69,9 @@ def test_review_export_share_and_ownership(client, auth, fake):
     assert client.get(f"/reviews/{review['id']}", headers=stranger).status_code == 404
     listed = client.get("/reviews", headers=auth).json()[0]
     assert listed["id"] == review["id"] and listed["issue_count"] == len(review["issues"])  # the history list shows it
+    assert client.delete(f"/reviews/{review['id']}", headers=stranger).status_code == 404
+    assert client.delete(f"/reviews/{review['id']}", headers=auth).status_code == 204
+    assert client.get(f"/shared/{token}").status_code == 404 and client.get("/reviews", headers=auth).json() == []
 
 
 def test_review_of_uploaded_zip_ignores_hostile_paths(client, auth, fake):

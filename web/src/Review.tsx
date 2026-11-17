@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   XCircle,
   Copy,
+  Trash2,
   Check,
   ArrowLeft,
   ShieldCheck,
@@ -395,9 +396,24 @@ export default function Reviews({ id }: { id?: string }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
+  const [left, setLeft] = useState<number | null>(null) // free reviews left in the rolling day; null: unlimited
+
   useEffect(() => {
     api('/reviews').then(setList).catch(() => {})
-  }, [report])
+    api<{ last_24h: Record<string, { count: number }>; daily_limits: Record<string, number> | null }>('/usage/me')
+      .then((u) => setLeft(u.daily_limits ? Math.max(0, u.daily_limits.review - (u.last_24h.review?.count ?? 0)) : null))
+      .catch(() => {})
+  }, [report, busy])
+
+  async function remove(id: string, source: string) {
+    if (!confirm(`Delete the review of ${source}? Its share link stops working.`)) return
+    try {
+      await api(`/reviews/${id}`, { method: 'DELETE' })
+      setList((rows) => rows.filter((r) => r.id !== id))
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
 
   useEffect(() => {
     if (!id) return
@@ -433,6 +449,7 @@ export default function Reviews({ id }: { id?: string }) {
 
   const isSubmitDisabled =
     busy ||
+    left === 0 ||
     (inputTab === 'code' && !code.trim()) ||
     (inputTab === 'file' && !file) ||
     (inputTab === 'git' && !url.trim())
@@ -575,6 +592,11 @@ export default function Reviews({ id }: { id?: string }) {
                   </span>
                 )}
               </button>
+              {left !== null && (
+                <p className={`text-center font-mono text-[11px] ${left ? 'text-muted' : 'text-danger'}`}>
+                  {left ? `${left} free ${left === 1 ? 'review' : 'reviews'} left today` : 'No free reviews left: each one frees up 24 hours after it was used'}
+                </p>
+              )}
             </form>
           </div>
 
@@ -588,10 +610,10 @@ export default function Reviews({ id }: { id?: string }) {
                 {list.map((item) => {
                   const grade = getGrade(item.score)
                   return (
+                    <div key={item.id} className="group flex items-center">
                     <a
-                      key={item.id}
                       href={`#/reviews/${item.id}`}
-                      className="flex items-center justify-between p-3.5 font-mono text-xs transition-colors hover:bg-surface"
+                      className="flex min-w-0 flex-1 items-center justify-between p-3.5 font-mono text-xs transition-colors hover:bg-surface"
                     >
                       <div className="flex min-w-0 items-center gap-3">
                         <span className={`inline-flex items-center justify-center rounded-lg border px-2 py-1 font-bold ${grade.color}`}>
@@ -608,6 +630,15 @@ export default function Reviews({ id }: { id?: string }) {
                         <ChevronRight className="h-4 w-4 text-muted" />
                       </div>
                     </a>
+                    <button
+                      onClick={() => remove(item.id, item.source)}
+                      className="mr-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-danger-subtle hover:text-danger [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11"
+                      aria-label={`Delete the review of ${item.source}`}
+                      title="Delete review"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                    </div>
                   )
                 })}
               </div>
