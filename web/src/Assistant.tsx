@@ -156,11 +156,13 @@ export default function Assistant() {
             const late = new Date(r.due).getTime() < Date.now()
             return (
             <li key={r.id} className="flex items-center gap-3 py-2">
-              <time className={`w-28 shrink-0 font-mono text-xs sm:w-36 ${late ? 'font-semibold text-danger' : 'text-muted'}`} dateTime={r.due}>
+              <div className="flex min-w-0 flex-1 flex-col sm:flex-row sm:items-center sm:gap-3">
+              <time className={`shrink-0 font-mono text-xs sm:w-36 ${late ? 'font-semibold text-danger' : 'text-muted'}`} dateTime={r.due}>
                 {late && <span className="mr-1">Overdue ·</span>}
                 {new Date(r.due).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
               </time>
               <span className="min-w-0 flex-1 truncate">{r.text}{r.repeat && <span className="ml-2 label">{r.repeat}</span>}</span>
+              </div>
               {!r.repeat && (
                 <button className="btn-ghost min-h-8 px-2" title="Snooze 1 hour" aria-label={`Snooze ${r.text} for 1 hour`} onClick={() => post(`/reminders/${r.id}/snooze`, { minutes: 60 }).then(load).catch(fail)}><AlarmClockPlus className="h-3.5 w-3.5" /></button>
               )}
