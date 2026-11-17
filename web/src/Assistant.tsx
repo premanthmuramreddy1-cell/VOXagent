@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlarmClockPlus, Bell, Brain, Check, ClipboardList, NotebookPen, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { AlarmClockPlus, Bell, Brain, Check, ClipboardList, ListChecks, NotebookPen, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { api, post } from './api'
 
 type Memory = { id: string; kind: string; text: string }
@@ -35,13 +35,15 @@ export default function Assistant() {
   const [editing, setEditing] = useState<Memory | null>(null)
   const [draft, setDraft] = useState<{ id: string | null; text: string } | null>(null) // id null: a new note
   const [status, setStatus] = useState('')
+  const [lists, setLists] = useState<Record<string, { id: string; text: string }[]>>({})
 
   const fail = (e: unknown) => setStatus((e as Error).message)
   const load = useCallback(async () => {
-    const [m, n, r, b, p] = await Promise.all([
+    const [m, n, r, b, p, l] = await Promise.all([
       api<Memory[]>('/memory'), api<Note[]>('/notes'), api<Reminder[]>('/reminders'),
-      api<{ text: string }>('/reminders/briefing'), api<Record<string, string>>('/me/profile'),
+      api<{ text: string }>('/reminders/briefing'), api<Record<string, string>>('/me/profile'), api('/lists'),
     ])
+    setLists(l)
     setMemories(m)
     setNotes(n)
     setReminders(r)
@@ -125,6 +127,49 @@ export default function Assistant() {
       <Section icon={ClipboardList} title="Today" hint="Spoken each morning as a push">
         <p className="text-sm leading-relaxed">{briefing || '…'}</p>
         <button className="btn mt-3" onClick={enablePush}><Bell className="h-3.5 w-3.5" /> Turn on notifications</button>
+      </Section>
+
+      <Section icon={ListChecks} title="Lists" hint={'Or say "add milk and eggs to my grocery list"'}>
+        <form
+          className="mb-3 grid grid-cols-[minmax(0,8rem)_minmax(0,1fr)_auto] gap-2"
+          onSubmit={async (e) => {
+            e.preventDefault()
+            const el = e.currentTarget
+            const form = new FormData(el)
+            try {
+              await post('/lists/items', { list: form.get('list'), text: form.get('item') })
+              ;(el.elements.namedItem('item') as HTMLInputElement).value = '' // keep the list name for the next item
+              load()
+            } catch (err) {
+              fail(err)
+            }
+          }}
+        >
+          <input name="list" className="field min-w-0" placeholder="groceries" aria-label="List name" list="list-names" />
+          <datalist id="list-names">{Object.keys(lists).map((n) => <option key={n} value={n} />)}</datalist>
+          <input name="item" required className="field min-w-0" placeholder="Item" aria-label="Item to add" />
+          <button className="btn btn-accent" aria-label="Add to list"><Plus className="h-3.5 w-3.5" /></button>
+        </form>
+        {Object.keys(lists).length === 0 && <p className="py-2 text-sm text-muted">No lists yet.</p>}
+        {Object.entries(lists).map(([name, items]) => (
+          <div key={name} className="mb-3">
+            <h3 className="label mb-1 capitalize">{name} · {items.length}</h3>
+            <ul className="flex flex-wrap gap-1.5 text-sm">
+              {items.map((i) => (
+                <li key={i.id}>
+                  <button
+                    className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-line px-3 hover:border-ok hover:text-ok [@media(pointer:coarse)]:min-h-11"
+                    aria-label={`Tick off ${i.text} from ${name}`}
+                    title="Tick off"
+                    onClick={() => api(`/lists/items/${i.id}`, { method: 'DELETE' }).then(load).catch(fail)}
+                  >
+                    <Check className="h-3 w-3" /> {i.text}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </Section>
 
       <Section icon={Bell} title="Reminders" hint={'Or say "remind me at 9 to call mom"'}>

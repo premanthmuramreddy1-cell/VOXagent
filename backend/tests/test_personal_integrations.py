@@ -467,3 +467,19 @@ def test_edit_reminder_changes_text_time_and_repeat_only_for_its_owner(client):
     assert client.put(f"/reminders/{row['id']}", headers=headers, json={**body, "when": "soon"}).status_code == 422
     stranger, _ = signup(client)
     assert client.put(f"/reminders/{row['id']}", headers=stranger, json=body).status_code == 404
+
+
+def test_lists_page_adds_without_duplicates_groups_by_list_and_ticks_off(client):
+    headers, _ = signup(client)
+    milk = client.post("/lists/items", headers=headers, json={"list": "shopping", "text": "Milk"}).json()
+    assert milk["list"] == "groceries"  # same name the voice tool uses
+    again = client.post("/lists/items", headers=headers, json={"text": " milk "}).json()
+    assert again["id"] == milk["id"]
+    client.post("/lists/items", headers=headers, json={"list": "Packing list", "text": "charger"})
+    assert client.post("/lists/items", headers=headers, json={"text": "   "}).status_code == 422
+    lists = client.get("/lists", headers=headers).json()
+    assert lists == {"groceries": [{"id": milk["id"], "text": "Milk"}], "packing": [lists["packing"][0]]}
+    stranger, _ = signup(client)
+    assert client.delete(f"/lists/items/{milk['id']}", headers=stranger).status_code == 404
+    assert client.delete(f"/lists/items/{milk['id']}", headers=headers).json() == {"ok": True}
+    assert "groceries" not in client.get("/lists", headers=headers).json()

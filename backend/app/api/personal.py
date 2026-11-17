@@ -10,9 +10,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app import personal, push
+from app import life, personal, push
 from app.crypto import load_secret, save_secret
-from app.db import Memory, Note, PushSubscription, Reminder, User, get_db, now
+from app.db import ListItem, Memory, Note, PushSubscription, Reminder, User, get_db, now
 from app.security import current_user
 
 router = APIRouter()
@@ -152,6 +152,41 @@ def edit_note(note_id: str, body: NoteBody, user: User = Depends(current_user), 
 @router.delete("/notes/{note_id}")
 def delete_note(note_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
     db.delete(_own(db, Note, note_id, user))
+    db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- lists (the same ones the assistant fills by voice)
+
+class ListItemBody(BaseModel):
+    list: str = Field(default="", max_length=60)
+    text: str = Field(min_length=1, max_length=120)
+
+
+@router.get("/lists")
+def get_lists(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict[str, list[dict]]:
+    lists: dict[str, list[dict]] = {}
+    for row in db.scalars(select(ListItem).where(ListItem.user_id == user.id).order_by(ListItem.created_at)):
+        lists.setdefault(row.list, []).append({"id": row.id, "text": row.text})
+    return lists
+
+
+@router.post("/lists/items")
+def add_list_item(body: ListItemBody, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    name, text = life.list_name(body.list), body.text.strip()
+    if not text:
+        raise HTTPException(422, "Write what to add.")
+    same = next((i for i in life.items_on(db, user.id, name) if i.text.lower() == text.lower()), None)
+    row = same or ListItem(user_id=user.id, list=name, text=text)  # like the voice tool: no duplicates
+    if not same:
+        db.add(row)
+        db.commit()
+    return {"id": row.id, "list": name, "text": row.text}
+
+
+@router.delete("/lists/items/{item_id}")
+def remove_list_item(item_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    db.delete(_own(db, ListItem, item_id, user))
     db.commit()
     return {"ok": True}
 
