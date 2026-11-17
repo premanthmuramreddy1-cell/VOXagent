@@ -69,3 +69,12 @@ def as_tool(skill: Skill) -> dict:
             "parameters": skill.input_schema.model_json_schema(),
         },
     }
+
+
+def is_owner(user_id: str) -> bool:
+    """The Mac's owner (an admin account). Others reach VoxAgent over its public link and must not drive this Mac."""
+    from app.db import SessionLocal, User  # here, not at the top: app.db is imported while skills load
+
+    with SessionLocal() as db:
+        user = db.get(User, user_id)
+    return bool(user and user.is_admin)

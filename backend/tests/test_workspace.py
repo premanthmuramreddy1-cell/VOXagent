@@ -32,6 +32,13 @@ def test_new_workspace_is_a_git_repo_with_notes(ws):
     assert [h["message"] for h in asyncio.run(wsp.history(base))] == ["add project notes", "workspace created"]
 
 
+def test_commits_carry_the_name_of_the_person_whose_workspace_it_is(ws):
+    db, space, base = ws
+    email = db.get(User, space.user_id).email
+    _, log = asyncio.run(wsp.git(base, "log", "-1", "--format=%an <%ae> / %cn"))
+    assert log == f"{email.split('@')[0]} <{email}> / VoxAgent"
+
+
 def test_paths_cannot_escape_the_workspace(ws):
     _, _, base = ws
     for bad in ("../x", "/../../etc/passwd", ".git/config", ".GIT/config", "a/../../b", ""):  # macOS ignores case

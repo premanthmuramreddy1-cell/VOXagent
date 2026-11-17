@@ -106,6 +106,17 @@ def test_confirmation_gate(permission, decision, runs):
     assert activity(name) == ["ok" if runs else "declined"]
 
 
+def test_owner_only_skills_are_refused_for_others_before_any_confirmation(monkeypatch):
+    import app.agent as agent_mod
+
+    skill = EchoSkill("mac", Permission.CHANGE)
+    skill.owner_only = True
+    rec = Recorder("apply")
+    monkeypatch.setattr(agent_mod, "is_owner", lambda user_id: False)
+    run(Agent([FakeLLM(plan([("Do it", "mac")]), call("mac"), "ok")], {"mac": skill}), rec)
+    assert skill.runs == 0 and rec.confirms == [] and activity("mac") == ["not owner"]
+
+
 def test_read_skill_runs_without_confirmation():
     rec = Recorder()
     run(Agent([FakeLLM(plan([("Echo", "echo")]), call(), "ok")], {"echo": EchoSkill()}), rec)

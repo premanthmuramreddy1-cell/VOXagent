@@ -14,7 +14,7 @@ from app import forms
 from app.config import settings
 from app.db import Activity, SessionLocal, record, record_error
 from app.providers import LLM, ToolCall, llm_stream
-from app.skills import Permission, RunContext, Skill, as_tool
+from app.skills import Permission, RunContext, Skill, as_tool, is_owner
 
 LANGUAGES = {"en": "English", "hi": "Hindi (Hinglish is fine)", "te": "Telugu", "ta": "Tamil"}
 NEEDS = {Permission.CHANGE: {"apply", "yes"}, Permission.CRITICAL: {"yes"}}
@@ -374,6 +374,9 @@ class Agent:
                 "",
             )
         reason = f"user asked: {plan['restatement']}"
+        if getattr(skill, "owner_only", False) and not is_owner(turn.user_id):  # before asking: nothing to approve
+            log_activity(turn, skill.name, reason, skill.permission.value, "not owner")
+            return f"{skill.name} acts on the host computer, which only its owner can control.", True, False, ""
         if skill.permission in NEEDS:  # the gate lives here so no skill can skip it
             request = {"skill": skill.name, "permission": skill.permission.value, "args": call.arguments}
             if await turn.confirm(request) not in NEEDS[skill.permission]:

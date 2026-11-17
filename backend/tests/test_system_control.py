@@ -6,6 +6,19 @@ from app.skills import RunContext
 from app.skills.system_control import Args, skill
 
 
+@pytest.fixture(autouse=True)
+def owner(monkeypatch):  # these tests drive the Mac as its owner; strangers are refused below
+    monkeypatch.setattr("app.skills.system_control.is_owner", lambda user_id: True)
+
+
+@pytest.mark.anyio
+async def test_only_the_owner_can_control_this_mac(mock_ctx, monkeypatch):
+    monkeypatch.setattr("app.skills.system_control.is_owner", lambda user_id: False)
+    with patch("app.skills.system_control._run_cmd", new_callable=AsyncMock) as mock_run:
+        res = await skill.run(Args(action="app_open", value="Spotify"), mock_ctx)
+    assert res.data == {"ok": False} and "owner" in res.summary and not mock_run.called
+
+
 @pytest.fixture
 def mock_ctx():
     return RunContext(

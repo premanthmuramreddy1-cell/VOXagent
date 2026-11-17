@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db import PendingChange, Workspace, now
+from app.db import PendingChange, SessionLocal, User, Workspace, now
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", ".next", "target", ".vox"}
 NOTES = "NOTES.md"
@@ -66,9 +66,9 @@ def rel(base: Path, path: Path) -> str:
 
 # ---------------------------------------------------------------- git
 
-async def git(base: Path, *args: str) -> tuple[int, str]:
+async def git(base: Path, *args: str, env: dict[str, str] | None = None) -> tuple[int, str]:
     proc = await asyncio.create_subprocess_exec(
-        "git", *args, cwd=base, env={**os.environ, **GIT_ENV},
+        "git", *args, cwd=base, env={**os.environ, **GIT_ENV, **(env or {})},
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
     )
     out, _ = await proc.communicate()
@@ -93,8 +93,19 @@ async def commit(base: Path, message: str) -> str:
     code, _ = await git(base, "diff", "--cached", "--quiet")
     if code == 0:
         return ""
-    await git(base, "commit", "-q", "-m", message[:200])
+    await git(base, "commit", "-q", "-m", message[:200], env=_author(base))
     return (await git(base, "rev-parse", "--short", "HEAD"))[1]
+
+
+def _author(base: Path) -> dict[str, str]:
+    """Commits carry the name of the person whose workspace it is (workspaces/<user id>/<id>); VoxAgent commits them."""
+    if base.parent.parent.name != "workspaces":
+        return {}
+    with SessionLocal() as db:
+        user = db.get(User, base.parent.name)
+    if not user:
+        return {}
+    return {"GIT_AUTHOR_NAME": user.name or user.email.split("@")[0], "GIT_AUTHOR_EMAIL": user.email}
 
 
 async def history(base: Path, limit: int = 15) -> list[dict]:

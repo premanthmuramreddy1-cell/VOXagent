@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from app import forms
 from app.crypto import delete_secret, load_secret, save_secret
 from app.db import SessionLocal, User
-from app.skills import Permission, RunContext, SkillResult
+from app.skills import Permission, RunContext, SkillResult, is_owner
 
 
 class FillArgs(BaseModel):
@@ -85,12 +85,16 @@ class SignInArgs(BaseModel):
 
 class FormSignIn:
     name, input_schema, permission = "form_sign_in", SignInArgs, Permission.CHANGE
+    owner_only = True
     description = ("Open a browser window on this computer so the user signs in to Microsoft or Google themselves, "
                    "once. Forms are then answered as the signed-in user, so sign-in-only forms open and forms that "
                    "record names show theirs: 'sign in for forms', 'log in to Microsoft for my forms'. Only when the "
                    "user asks to sign in or log in, never on your own. Never types a password.")
 
     async def run(self, args: SignInArgs, ctx: RunContext) -> SkillResult:
+        if not is_owner(ctx.user_id):  # the window opens on the owner's screen, where nobody else can type
+            return SkillResult("Signing in opens a window on the host computer, so only its owner can do it. Your "
+                               "forms are still filled with your own account name and email.", {"saved": False})
         await ctx.emit("form.sign_in", url=args.url)
         state = await forms.sign_in(args.url)
         if not state.get("cookies"):

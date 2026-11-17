@@ -87,14 +87,20 @@ def test_locked_google_sign_in_admits_only_listed_emails(client, monkeypatch):
     assert client.post("/auth/google", json={"credential": "tok"}).status_code == 200
 
 
-def test_export_then_delete_removes_account(client):
-    headers, _ = signup(client, "gone@example.com")
+def test_export_then_delete_removes_account(client, tmp_path, monkeypatch):
+    from app.skills import doc_writer
+
+    monkeypatch.setattr(doc_writer, "DOCS_ROOT", tmp_path)
+    headers, body = signup(client, "gone@example.com")
+    (tmp_path / "people" / body["user"]["id"]).mkdir(parents=True)
+    (tmp_path / "people" / body["user"]["id"] / "plan.md").write_text("mine")
     client.patch("/me", headers=headers, json={"preferred_language": "te"})
     export = client.get("/me/export", headers=headers).json()
     assert export["user"]["preferred_language"] == "te"
     assert "password_hash" not in str(export)
     assert client.delete("/me", headers=headers).json() == {"ok": True}
     assert client.get("/me", headers=headers).status_code == 401
+    assert not (tmp_path / "people" / body["user"]["id"]).exists()  # their documents go with them
 
 
 def test_auth_endpoints_are_rate_limited(client, monkeypatch):

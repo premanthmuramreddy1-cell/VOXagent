@@ -10,6 +10,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.skills import doc_writer
 from app.config import settings
 from app import sandbox
 from app.crypto import load_secret
@@ -246,4 +247,5 @@ async def delete_me(user: User = Depends(current_user), db: Session = Depends(ge
     db.commit()
     for folder in ("uploads", "workspaces"):
         shutil.rmtree(Path(settings().data_dir) / folder / user.id, ignore_errors=True)
+    shutil.rmtree(doc_writer.DOCS_ROOT / "people" / user.id, ignore_errors=True)  # documents they had written
     return {"ok": True}

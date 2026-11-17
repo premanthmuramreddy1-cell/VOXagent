@@ -12,8 +12,7 @@ from pydantic import BaseModel, Field
 
 from app import screen
 from app.config import settings
-from app.db import SessionLocal, User
-from app.skills import Permission, RunContext, SkillResult
+from app.skills import Permission, RunContext, SkillResult, is_owner
 
 # shortcut: a word list, backed by the model rule below; a task can still be reworded around it
 OFF_LIMITS = re.compile(r"\b(pay|payment|buy|purchase|checkout|send|email|message|post|tweet|delete|remove|erase|"
@@ -53,13 +52,12 @@ def _allowed(user_id: str) -> str:
         return "Screen control is off. The owner can turn it on with VOX_SCREEN_CONTROL=true."
     if sys.platform != "darwin":
         return "Screen control only works when VoxAgent runs on a Mac."
-    with SessionLocal() as db:
-        user = db.get(User, user_id)
-    return "" if user and user.is_admin else "Only the owner's account can use this Mac's screen."
+    return "" if is_owner(user_id) else "Only the owner's account can use this Mac's screen."
 
 
 class ScreenControl:
     name, input_schema, permission = "screen_control", Args, Permission.CRITICAL
+    owner_only = True
     description = ("Use the owner's Mac for them: look at the screen and press buttons, type, press keys and open "
                    "apps until a task is done ('open Notes and make a note called Groceries', 'in Safari go to "
                    "the downloads list'). Never sends, buys, pays, deletes or types passwords.")

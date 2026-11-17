@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
-from app.skills import Permission, RunContext, SkillResult
+from app.skills import Permission, RunContext, SkillResult, is_owner
 
 SAFE_APP_NAME = re.compile(r"^[A-Za-z0-9 _\-.]+$")
 # macOS media keys: 16 play/pause, 17 next, 18 previous.
@@ -168,6 +168,7 @@ async def handle_folder(path: str) -> tuple[str, dict[str, Any]]:
 
 class SystemControl:
     name = "system_control"
+    owner_only = True
     description = (
         "Control this computer: set or mute the volume, play, pause or skip music, open or quit any app "
         "('open Spotify', 'quit Safari'), open a website in the browser ('open youtube.com'), open a folder in "
@@ -178,6 +179,8 @@ class SystemControl:
     permission = Permission.CHANGE
 
     async def run(self, args: Args, ctx: RunContext) -> SkillResult:
+        if not is_owner(ctx.user_id):  # the apps, volume and files are the owner's, whoever is talking
+            return SkillResult("Only the owner of this computer can control its apps, sound and files.", {"ok": False})
         act = args.action
         val = args.value
 
