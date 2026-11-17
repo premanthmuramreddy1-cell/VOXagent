@@ -92,7 +92,7 @@ def test_review_input_limits_and_errors(client, auth, fake, monkeypatch):
     assert client.post("/uploads", headers=auth, files={"file": ("big.py", b"x" * 11)}).status_code == 413
     monkeypatch.setattr(settings(), "free_daily_reviews", 0)
     limited = client.post("/reviews", headers=auth, json={"code": BAD})
-    assert limited.status_code == 400 and "daily free limit" in limited.json()["detail"]
+    assert limited.status_code == 429 and "24 hours" in limited.json()["detail"]
 
 
 def test_review_keeps_static_findings_when_the_llm_is_down(client, auth, fake):

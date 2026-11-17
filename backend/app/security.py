@@ -93,4 +93,4 @@ def check_daily_limit(db: Session, user: User, kind: str, limit: int) -> None:
         select(func.count()).where(UsageEvent.user_id == user.id, UsageEvent.kind == kind, UsageEvent.ts > since)
     )
     if (used or 0) >= limit:
-        raise HTTPException(429, f"daily free limit reached for {kind}")
+        raise HTTPException(429, f"daily free limit reached for {kind}; each one frees up again 24 hours after it was used")

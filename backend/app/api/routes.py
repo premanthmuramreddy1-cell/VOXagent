@@ -15,7 +15,7 @@ from app import providers as prov
 from app.agent import Agent
 from app.config import settings
 from app.db import (Activity, BotLink, ChatSession, ErrorEvent, Message, Review, Upload, UsageEvent, User, get_db, now)
-from app.security import admin_user, current_user, sha256
+from app.security import admin_user, check_daily_limit, current_user, sha256
 from app.skills import RunContext, discover
 from app.skills.code_review import Args, skill, to_markdown
 
@@ -140,6 +140,7 @@ def _review_json(review: Review) -> dict:
 
 @router.post("/reviews")
 async def create_review(args: Args, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    check_daily_limit(db, user, "review", settings().free_daily_reviews)  # 429, not the skill's 400 for bad input
     agent = Agent(prov.providers().llm, {})
 
     async def quiet(*_args, **_kwargs) -> None: ...
