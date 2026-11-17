@@ -340,7 +340,7 @@ export default function WorkspaceView() {
           {files.map((path) => (
             <li key={path}>
               <button
-                className={`flex w-full items-center gap-1.5 truncate px-3 py-1 text-left hover:bg-raised ${path === active ? 'bg-raised text-ink' : 'text-muted'}`}
+                className={`flex w-full items-center gap-1.5 truncate px-3 py-1 text-left hover:bg-raised [@media(pointer:coarse)]:min-h-11 ${path === active ? 'bg-raised text-ink' : 'text-muted'}`}
                 style={{ paddingLeft: `${12 + (path.split('/').length - 1) * 12}px` }}
                 onClick={() => openFile(path)}
               >
