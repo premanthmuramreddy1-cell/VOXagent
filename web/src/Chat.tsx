@@ -955,10 +955,10 @@ export default function Chat() {
                     <button
                       type="submit"
                       disabled={!text.trim() && !attached}
-                      className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent text-on-accent transition-opacity disabled:opacity-30"
+                      className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent text-on-accent transition-opacity disabled:opacity-30"
                       title="Send message"
                     >
-                      <Send className="h-3.5 w-3.5" />
+                      <Send className="h-4 w-4" />
                     </button>
                   )}
                 </div>
@@ -968,7 +968,8 @@ export default function Chat() {
               <button
                 type="button"
                 aria-pressed={recording}
-                className={`relative flex h-11 min-w-36 shrink-0 select-none items-center justify-center gap-2 rounded-xl font-mono text-xs font-semibold transition-all duration-150 ${
+                aria-label={recording ? 'Listening' : 'Hold to talk'}
+                className={`relative flex h-11 min-w-11 px-3 sm:min-w-36 shrink-0 select-none items-center justify-center gap-2 rounded-xl font-mono text-xs font-semibold transition-all duration-150 ${
                   recording
                     ? 'border border-accent bg-accent text-on-accent shadow-lg shadow-accent/25 scale-[1.02]'
                     : 'border border-line bg-raised text-ink hover:border-accent hover:bg-surface active:scale-[0.98]'
@@ -990,12 +991,12 @@ export default function Chat() {
                       <span className="h-3.5 w-1 rounded-full bg-surface animate-bounce" style={{ animationDelay: '150ms' }} />
                       <span className="h-2 w-1 rounded-full bg-surface animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
-                    <span>Listening…</span>
+                    <span className="hidden sm:inline">Listening…</span>
                   </>
                 ) : (
                   <>
                     <MicIcon className="h-4 w-4 text-accent" />
-                    <span>Hold to Talk</span>
+                    <span className="hidden sm:inline">Hold to Talk</span>
                   </>
                 )}
               </button>

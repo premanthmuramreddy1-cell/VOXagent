@@ -92,21 +92,22 @@ export default function Assistant() {
 
       <Section icon={Bell} title="Reminders" hint={'Or say "remind me at 9 to call mom"'}>
         <form
-          className="mb-3 grid grid-cols-[1fr_auto] gap-2 sm:grid-cols-[1fr_auto_auto_auto]"
+          className="mb-3 grid grid-cols-[1fr_auto_auto] gap-2"
           onSubmit={async (e) => {
             e.preventDefault()
-            const form = new FormData(e.currentTarget)
+            const el = e.currentTarget // React clears currentTarget once the handler awaits
+            const form = new FormData(el)
             try {
               await post('/reminders', { text: form.get('text'), when: form.get('when'), repeat: form.get('repeat') })
-              e.currentTarget.reset()
+              el.reset()
               load()
             } catch (err) {
               fail(err)
             }
           }}
         >
-          <input name="text" required className="field col-span-2 sm:col-span-1" placeholder="What" aria-label="Reminder text" />
-          <input name="when" required type="datetime-local" className="field col-span-2 sm:col-span-1" aria-label="When" />
+          <input name="text" required className="field col-span-3" placeholder="What" aria-label="Reminder text" />
+          <input name="when" required type="datetime-local" className="field min-w-0" aria-label="When" />
           <select name="repeat" className="field" aria-label="Repeat">
             <option value="">Once</option><option value="daily">Daily</option>
             <option value="weekdays">Weekdays</option><option value="weekly">Weekly</option>
@@ -117,8 +118,8 @@ export default function Assistant() {
           {reminders.length === 0 && <li className="py-2 text-muted">Nothing scheduled.</li>}
           {reminders.map((r) => (
             <li key={r.id} className="flex items-center gap-3 py-2">
-              <time className="w-28 shrink-0 font-mono text-xs text-muted" dateTime={r.due}>
-                {new Date(r.due).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}
+              <time className="w-36 shrink-0 font-mono text-xs text-muted" dateTime={r.due}>
+                {new Date(r.due).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
               </time>
               <span className="min-w-0 flex-1 truncate">{r.text}{r.repeat && <span className="ml-2 label">{r.repeat}</span>}</span>
               <button className="btn-ghost min-h-8 px-2" aria-label={`Mark ${r.text} done`} onClick={() => post(`/reminders/${r.id}/done`).then(load).catch(fail)}><Check className="h-3.5 w-3.5" /></button>

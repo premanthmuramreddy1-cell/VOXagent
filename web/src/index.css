@@ -117,7 +117,8 @@ body {
     @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-line bg-raised px-3.5 py-2 font-mono text-xs font-medium text-ink transition-all duration-150 hover:border-muted/50 hover:bg-raised-hover active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none;
   }
   .btn-accent {
-    @apply border-accent bg-accent text-on-accent font-semibold hover:opacity-90 active:scale-[0.98];
+    /* hover keeps the accent: .btn's hover:bg-raised-hover would otherwise leave on-accent text invisible */
+    @apply border-accent bg-accent text-on-accent font-semibold hover:border-accent hover:bg-accent hover:opacity-90 active:scale-[0.98];
   }
   .btn-ghost {
     @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-transparent bg-transparent px-3 py-2 font-mono text-xs font-medium text-muted transition-all duration-150 hover:bg-raised hover:text-ink active:scale-[0.98];
@@ -167,7 +168,8 @@ body {
 /* The conversation stays legible but quiet: older messages fade out at the top, and the whole rail steps back
    while the bots are performing (built object, news, a spelled line) until the user points at it. */
 .chat-fade {
-  mask-image: linear-gradient(to bottom, transparent, #000 22%);
+  /* fade only the rail's top padding (py-6), so messages at rest stay full ink */
+  mask-image: linear-gradient(to bottom, transparent, #000 1.5rem);
 }
 .chat-rail {
   transition: opacity 400ms ease-out;

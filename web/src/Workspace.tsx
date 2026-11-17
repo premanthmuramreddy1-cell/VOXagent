@@ -124,7 +124,7 @@ function Terminal({ ws, onFiles }: { ws: string; onFiles: () => void }) {
 
   return (
     <div className="flex h-full flex-col">
-      <pre ref={box} className="code-layer min-h-0 flex-1 overflow-auto bg-surface text-[12px] text-ink" aria-live="polite">
+      <pre ref={box} className="code-layer min-h-0 flex-1 overflow-auto bg-surface text-[12px] text-ink" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }} aria-live="polite">
         {output || 'Run a command inside this workspace\'s sandbox. Output streams here.'}
       </pre>
       <form
