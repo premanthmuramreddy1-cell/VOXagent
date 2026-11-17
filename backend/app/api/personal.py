@@ -15,6 +15,7 @@ from app import life, personal, push
 from app.crypto import load_secret, save_secret
 from app.db import Habit, ListItem, Payment, Memory, Note, PushSubscription, Reminder, User, get_db, now
 from app.security import current_user
+from app.skills.life_tools import CLOCK
 
 router = APIRouter()
 
@@ -198,6 +199,7 @@ class HabitBody(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     target: int = Field(default=1, ge=1, le=100)
     unit: str = Field(default="time", max_length=20)
+    times: list[str] = Field(default_factory=list, max_length=12)  # local HH:MM, nudged when one passes unlogged
 
 
 class HabitLog(BaseModel):
@@ -224,7 +226,10 @@ def add_habit(body: HabitBody, user: User = Depends(current_user), db: Session =
     if row is None or row.name.lower() != name.lower():
         row = Habit(user_id=user.id, name=name)
         db.add(row)
-    row.target, row.unit = body.target, body.unit.strip() or "time"
+    times = sorted({t.strip().zfill(5) for t in body.times if t.strip()})
+    if bad := [t for t in times if not CLOCK.match(t)]:
+        raise HTTPException(422, f"Give times like 09:00 or 21:30, not {', '.join(bad)}.")
+    row.target, row.unit, row.times = max(body.target, len(times)), body.unit.strip() or "time", times
     db.commit()
     return _habit(row, db)
 

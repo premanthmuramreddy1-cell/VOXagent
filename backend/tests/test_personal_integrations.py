@@ -520,3 +520,11 @@ def test_bills_page_tracks_totals_marks_paid_and_stops(client):
     assert client.post(f"/payments/{rent['id']}/paid", headers=stranger).status_code == 404
     assert client.delete(f"/payments/{rent['id']}", headers=headers).json() == {"ok": True}
     assert [p["name"] for p in client.get("/payments", headers=headers).json()["items"]] == ["Gym"]
+
+
+def test_habit_times_from_the_page_are_checked_sorted_and_raise_the_target(client):
+    headers, _ = signup(client)
+    pill = client.post("/habits", headers=headers, json={"name": "Vitamin", "times": ["21:00", "9:00", " "]}).json()
+    assert pill["times"] == ["09:00", "21:00"] and pill["target"] == 2  # one dose per time
+    bad = client.post("/habits", headers=headers, json={"name": "Vitamin", "times": ["25:00"]})
+    assert bad.status_code == 422 and "25:00" in bad.json()["detail"]

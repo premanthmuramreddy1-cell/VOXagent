@@ -214,13 +214,14 @@ export default function Assistant() {
 
       <Section icon={Flame} title="Habits" hint={'Or say "I drank 2 glasses of water"'}>
         <form
-          className="mb-3 grid grid-cols-[minmax(0,1fr)_4.5rem_minmax(0,6rem)_auto] gap-2"
+          className="mb-3 grid grid-cols-3 gap-2 sm:grid-cols-[minmax(0,1fr)_4.5rem_minmax(0,6rem)_minmax(0,8rem)_auto]"
           onSubmit={async (e) => {
             e.preventDefault()
             const el = e.currentTarget
             const form = new FormData(el)
             try {
-              await post('/habits', { name: form.get('name'), target: Number(form.get('target')), unit: form.get('unit') || 'time' })
+              const times = String(form.get('times') ?? '').split(/[\s,]+/).filter(Boolean)
+              await post('/habits', { name: form.get('name'), target: Number(form.get('target')), unit: form.get('unit') || 'time', times })
               el.reset()
               load()
             } catch (err) {
@@ -228,10 +229,11 @@ export default function Assistant() {
             }
           }}
         >
-          <input name="name" required className="field min-w-0" placeholder="Water" aria-label="Habit name" />
+          <input name="name" required className="field col-span-3 min-w-0 sm:col-span-1" placeholder="Water" aria-label="Habit name" />
           <input name="target" type="number" min={1} max={100} defaultValue={1} className="field min-w-0" aria-label="Times a day" />
           <input name="unit" className="field min-w-0" placeholder="glass" aria-label="Unit" />
-          <button className="btn btn-accent" aria-label="Track habit"><Plus className="h-3.5 w-3.5" /></button>
+          <input name="times" className="field min-w-0" placeholder="09:00, 21:00" aria-label="Nudge times (optional)" />
+          <button className="btn btn-accent col-span-3 sm:col-span-1" aria-label="Track habit"><Plus className="h-3.5 w-3.5" /></button>
         </form>
         <ul className="divide-y divide-line text-sm">
           {habits.length === 0 && <li className="py-2 text-muted">No habits yet.</li>}
@@ -241,7 +243,7 @@ export default function Assistant() {
             return (
               <li key={h.id} className="flex items-center gap-2 py-2">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate">{h.name}{h.streak > 1 && <span className="ml-2 label">{h.streak}-day streak</span>}</p>
+                  <p className="truncate">{h.name}{h.times.length > 0 && <span className="ml-2 font-mono text-xs text-muted">at {h.times.join(', ')}</span>}{h.streak > 1 && <span className="ml-2 label">{h.streak}-day streak</span>}</p>
                   <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-line/60" role="progressbar" aria-label={`${h.name} today`} aria-valuenow={h.done} aria-valuemin={0} aria-valuemax={h.target}>
                     <div className={`h-full ${met ? 'bg-ok' : 'bg-accent'}`} style={{ width: `${Math.min(100, (h.done / h.target) * 100)}%` }} />
                   </div>
