@@ -1,5 +1,6 @@
 """Sessions, uploads, reviews, skills, usage and admin endpoints."""
 
+import math
 import secrets
 import statistics
 from datetime import timedelta
@@ -66,6 +67,8 @@ async def upload(file: UploadFile, user: User = Depends(current_user), db: Sessi
     if len(blob) > limit:
         raise HTTPException(413, f"file is larger than {limit // 1_000_000} MB")
     name = Path(file.filename or "upload").name  # drop any directory part the client sent
+    if name in ("", ".", ".."):  # these name the folder itself, not a file in it
+        name = "upload"
     row = Upload(user_id=user.id, filename=name, size=len(blob))
     db.add(row)
     db.commit()
@@ -180,7 +183,7 @@ def metrics(_admin: User = Depends(admin_user), db: Session = Depends(get_db)) -
     for kind, ms in rows:
         by_kind.setdefault(kind, []).append(ms)
     return {
-        kind: {"count": len(v), "p50": round(statistics.median(v)), "p95": sorted(v)[int(len(v) * 0.95) - 1 if len(v) > 1 else 0]}
+        kind: {"count": len(v), "p50": round(statistics.median(v)), "p95": sorted(v)[math.ceil(len(v) * 0.95) - 1]}
         for kind, v in by_kind.items()
     }
 

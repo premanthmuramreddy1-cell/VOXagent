@@ -59,9 +59,24 @@ def admin_user(user: User = Depends(current_user)) -> User:
 _hits: dict[str, deque[float]] = defaultdict(deque)
 
 
+def client_ip(request: Request) -> str:
+    """The caller's address. Behind the local tunnel every request comes from 127.0.0.1, so only then is the
+    tunnel's forwarded address used; from anywhere else the header is the caller's own claim and is ignored."""
+    host = request.client.host if request.client else "?"
+    if host in ("127.0.0.1", "::1"):
+        forwarded = request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for", "")
+        if first := forwarded.split(",")[0].strip():
+            return first
+    return host
+
+
 def rate_limit(request: Request) -> None:
-    key = f"{request.client.host if request.client else '?'}:{request.url.path}"
-    hits, t = _hits[key], time.monotonic()
+    key = f"{client_ip(request)}:{request.url.path}"
+    t = time.monotonic()
+    if len(_hits) > 10_000:  # forget callers idle for a minute, so a stream of new addresses cannot grow memory
+        for old in [k for k, v in _hits.items() if not v or v[-1] < t - 60]:
+            del _hits[old]
+    hits = _hits[key]
     while hits and hits[0] < t - 60:
         hits.popleft()
     if len(hits) >= settings().auth_rate_per_min:

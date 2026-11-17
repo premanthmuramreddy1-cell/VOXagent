@@ -208,6 +208,7 @@ class Agent:
             steps = [s for s in steps if not REVIEW_FIRST.get(str(s["skill"]), set()) & prepared]
             understood = str(plan.get("understood") or "")
             plan = {**plan, "restatement": str(plan["restatement"]), "steps": steps,
+                    "unclear": plan.get("unclear") is True, "question": str(plan.get("question") or ""),
                     "understood": understood if is_spelling_fix(turn.text, understood) else ""}
         except (ValueError, KeyError, TypeError, AttributeError):  # the model broke the schema: carry on without a plan
             plan = {"restatement": turn.text[:140], "language": "", "unclear": False, "question": "", "steps": [],
@@ -263,12 +264,14 @@ class Agent:
                 "user's own computer and can open links, forms and apps through these tools.")
         answer, last_summary = "", last if link else ""
         read_out, unspoken = False, list[str]()  # a final result was spoken; results the model has not worded yet
-        for _ in range(settings().agent_max_steps):
+        for step in range(settings().agent_max_steps):
             offered = set(todo)
             tools = [as_tool(self.skills[n]) for n in sorted(offered)] or None
             calls, start, first, tokens = [], time.perf_counter(), 0.0, 0
             step_started_text = False
-            async for event in llm_stream(self.llms, messages, tools):
+            # a planned skill is called on the first round: small models answered "done" or "I can't" without it
+            force = step == 0 and not shortlisted and bool(tools)
+            async for event in llm_stream(self.llms, messages, tools, force_tool=force):
                 if event.text:
                     first = first or time.perf_counter() - start
                     chunk = event.text

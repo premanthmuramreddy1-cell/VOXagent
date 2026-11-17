@@ -11,8 +11,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app import sandbox
 from app.crypto import load_secret
-from app.db import (Activity, Base, BotLink, ChatSession, Habit, LinkCode, ListItem, Memory, Message, Note,
+from app.db import (Activity, Base, BotLink, ChatSession, ErrorEvent, Habit, LinkCode, ListItem, Memory, Message, Note,
                     Payment, PendingChange,
                     PushSubscription, RefreshToken, Reminder, Review, Secret, Upload, UsageEvent, User,
                     UserSetting, Workspace, get_db, now)
@@ -54,17 +55,34 @@ def _issue(user: User, db: Session, response: Response) -> dict:
 
 
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+PROXY_HEADERS = ("cf-connecting-ip", "x-forwarded-for", "x-real-ip", "forwarded")
+
+
+def _local(request: Request) -> bool:
+    """On this Mac itself. A tunnel or proxy also connects from 127.0.0.1, so a forwarded request is never local."""
+    host = request.client.host if request.client else ""
+    return host in LOCAL_HOSTS and not any(h in request.headers for h in PROXY_HEADERS)
+
+
+def _may_join(email: str) -> None:
+    allowed = {e.lower() for e in settings().allowed_emails}
+    if allowed and email not in allowed:
+        raise HTTPException(403, "sign-up is closed on this VoxAgent")
 
 
 @router.post("/auth/signup", dependencies=[Depends(rate_limit)])
 def signup(body: Credentials, request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     email = body.email.lower()
+    local = _local(request)
+    # Nobody proves they own the address here: from outside this Mac, a password sign-up is refused once sign-up is
+    # locked, even for a listed email (anyone could type it). Listed people sign in with Google, which verifies it.
+    # Checked first, so a stranger cannot learn which emails have accounts.
+    if settings().allowed_emails and not local:
+        raise HTTPException(403, "sign-up is closed on this VoxAgent; sign in with Google or on the host machine")
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(409, "email already registered")
     admins = {e.lower() for e in settings().admin_emails}
-    # Nobody proves they own the address here, so a listed admin email only counts when the sign-up comes from the
-    # machine VoxAgent runs on (its owner). Over a public link, admins sign in with Google, which verifies the email.
-    local = request.client is not None and request.client.host in LOCAL_HOSTS
+    # A listed admin email only counts when the sign-up comes from the machine VoxAgent runs on (its owner).
     user = User(
         email=email, password_hash=hash_password(body.password), name=body.name.strip(),
         is_admin=email in admins and local,
@@ -120,6 +138,7 @@ async def google_login(body: GoogleCredential, response: Response, db: Session =
     email = str(claims["email"]).lower()
     user = db.scalar(select(User).where(User.email == email))
     if not user:
+        _may_join(email)
         admins = {e.lower() for e in settings().admin_emails}
         user = User(email=email, password_hash="", name=str(claims.get("name", ""))[:100], is_admin=email in admins)
         db.add(user)
@@ -207,13 +226,21 @@ def export_me(user: User = Depends(current_user), db: Session = Depends(get_db))
 
 
 @router.delete("/me")
-def delete_me(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+async def delete_me(user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    from app.api import ws  # late import: ws imports the agent stack
+
+    space_list = set(db.scalars(select(Workspace.id).where(Workspace.user_id == user.id)))
+    for server in [s for s in sandbox.SERVERS.values() if s.workspace_id in space_list]:
+        await sandbox.stop_server(server.id)  # a running preview would keep serving the deleted account's code
+    for chat_id in db.scalars(select(ChatSession.id).where(ChatSession.user_id == user.id)):
+        if channel := ws._channels.pop(chat_id, None):
+            channel.cancel_turn()
     session_ids = select(ChatSession.id).where(ChatSession.user_id == user.id)
     db.execute(delete(Message).where(Message.session_id.in_(session_ids)))
     space_ids = select(Workspace.id).where(Workspace.user_id == user.id)
     db.execute(delete(PendingChange).where(PendingChange.workspace_id.in_(space_ids)))
     for model in (ChatSession, RefreshToken, Activity, Upload, Review, UsageEvent, Workspace, Memory, Note, Reminder,
-                  Payment, Habit, ListItem, Secret, PushSubscription, BotLink, LinkCode, UserSetting):
+                  Payment, Habit, ListItem, Secret, PushSubscription, BotLink, LinkCode, UserSetting, ErrorEvent):
         db.execute(delete(model).where(model.user_id == user.id))
     db.execute(delete(User).where(User.id == user.id))
     db.commit()

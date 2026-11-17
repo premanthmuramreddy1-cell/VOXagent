@@ -145,6 +145,8 @@ def test_usage_admin_and_metrics(client, auth, fake):
     assert overview["usage"]["review"]["count"] >= 1 and overview["users"]
     record("stt", "u1", latency_ms=120)
     assert client.get("/metrics", headers=admin).json()["stt"] == {"count": 1, "p50": 120, "p95": 120}
+    record("stt", "u1", latency_ms=900)  # with two samples the 95th percentile is the slower one, not the faster
+    assert client.get("/metrics", headers=admin).json()["stt"]["p95"] == 900
     assert "code_review" in [s["name"] for s in client.get("/skills", headers=auth).json()]
 
 
@@ -153,3 +155,9 @@ def test_review_with_manifest_audits_dependencies():
     issues, notrun = asyncio.run(static_analysis(files))
     assert notrun == []
     assert any("not pinned" in i["explanation"] for i in issues)
+
+
+def test_uploads_named_after_a_folder_are_stored_as_files(client, auth):
+    for bad in ("..", "."):
+        r = client.post("/uploads", headers=auth, files={"file": (bad, b"data")})
+        assert r.status_code == 200 and r.json()["filename"] == "upload"

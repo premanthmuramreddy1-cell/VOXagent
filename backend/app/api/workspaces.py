@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import time
+from urllib.parse import quote
 
 import httpx
 import websockets
@@ -150,6 +151,8 @@ async def import_zip(ws_id: str, file: UploadFile, user: User = Depends(current_
                      db: Session = Depends(get_db)) -> dict:
     ws = await owned(db, ws_id, user)
     blob = await file.read(settings().max_workspace_bytes + 1)
+    if len(blob) > settings().max_workspace_bytes:  # cut off at the cap, it would only look like a broken zip
+        raise HTTPException(413, f"the zip is larger than {settings().max_workspace_bytes // 1_000_000} MB")
     count = _guard(lambda: wsp.import_zip(wsp.root(ws), blob))
     return {"files": count, "commit": await wsp.commit(wsp.root(ws), f"import {file.filename}")}
 
@@ -180,7 +183,8 @@ async def import_github(ws_id: str, body: GithubImport, user: User = Depends(cur
 async def export(ws_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> Response:
     ws = await owned(db, ws_id, user)
     return Response(wsp.export_zip(wsp.root(ws)), media_type="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="{ws.name}.zip"'})
+                    # RFC 5987 form: headers are latin-1, and a Telugu or Hindi name sent raw fails the response
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(ws.name)}.zip"})
 
 
 # ---------------------------------------------------------------- running code (phase 3)

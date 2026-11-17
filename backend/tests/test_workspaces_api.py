@@ -4,6 +4,15 @@ import zipfile
 from tests.conftest import signup
 
 
+def test_a_workspace_named_in_telugu_keeps_its_name_and_exports(client):
+    headers, _ = signup(client)
+    made = client.post("/workspaces", headers=headers, json={"name": 'నా ప్రాజెక్ట్ "1"/'}).json()
+    assert made["name"] == "నా ప్రాజెక్ట్ 1"  # vowel signs are part of the letters; quotes and slashes still go
+    exported = client.get(f"/workspaces/{made['id']}/export", headers=headers)
+    assert exported.status_code == 200 and zipfile.ZipFile(io.BytesIO(exported.content)).namelist() == ["NOTES.md"]
+    assert exported.headers["content-disposition"].isascii()  # headers cannot carry the name raw
+
+
 def test_editor_flow_over_rest(client):
     headers, _ = signup(client)
     spaces = client.get("/workspaces", headers=headers).json()
@@ -51,3 +60,13 @@ def test_staged_changes_accept_one_reject_rest(client):
     assert client.post(f"/workspaces/{ws}/changes/apply", headers=headers, json={"ids": [keep]}).json()["applied"] == 1
     assert client.post(f"/workspaces/{ws}/changes/reject", headers=headers, json={}).json() == {"rejected": 1}
     assert client.get(f"/workspaces/{ws}/files", headers=headers).json() == {"files": ["NOTES.md", "keep.txt"], "pending": 0}
+
+
+def test_an_oversized_zip_is_called_too_large_not_broken(client, monkeypatch):
+    from app.config import settings
+
+    headers, _ = signup(client)
+    ws = client.post("/workspaces", headers=headers, json={"name": "big"}).json()["id"]
+    monkeypatch.setattr(settings(), "max_workspace_bytes", 50)
+    r = client.post(f"/workspaces/{ws}/import", headers=headers, files={"file": ("p.zip", b"PK" + b"x" * 100)})
+    assert r.status_code == 413

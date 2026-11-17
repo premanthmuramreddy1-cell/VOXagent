@@ -106,6 +106,8 @@ def _seatbelt_profile(work: Path) -> str:
         '(deny file-write* (subpath "/"))'
         f"{deny_reads}"
         f'(allow file-read* file-write* (subpath "{work}"))'
+        # the server runs git on this folder outside the sandbox: a hook or fsmonitor written here would run there
+        f'(deny file-write* (subpath "{work}/.git"))'
         # realpath() stats every parent folder; metadata only, so their contents stay unreadable
         + "".join(f'(allow file-read-metadata (literal "{p}"))' for p in work.parents) +
         '(allow file-write* (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/fd/"))'
@@ -141,6 +143,8 @@ def _command(work: Path, command: str, name: str = "", port: int = 0) -> list[st
                f"--cpus={cfg.sandbox_cpus}", f"--memory={cfg.sandbox_memory_mb}m", "--pids-limit=256",
                "--cap-drop=ALL", "--security-opt=no-new-privileges", "-v", f"{work}:/work", "-w", "/work",
                "-e", "HOME=/work/.vox/home", "-e", "CI=1"]
+        if (work / ".git").is_dir():  # read-only, for the same reason the seatbelt profile denies writes to it
+            cmd += ["-v", f"{work}/.git:/work/.git:ro"]
         if port:  # a preview server: on the shared network when the API is containerised, else a loopback port
             net = ["--network", cfg.sandbox_network] if cfg.sandbox_network else ["-p", f"127.0.0.1:{port}:{port}"]
             cmd += [*net, "-e", f"PORT={port}"]

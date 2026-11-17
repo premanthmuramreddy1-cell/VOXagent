@@ -339,3 +339,124 @@ def test_a_provider_slow_to_start_hands_the_turn_to_the_next(monkeypatch):
         return "".join([e.text async for e in llm_stream([Slow(), Fast()], [])])
 
     assert asyncio.run(asyncio.wait_for(go(), 2)) == "here"
+
+
+
+def test_a_cloud_without_its_key_fails_fast_so_the_next_model_answers(monkeypatch):
+    monkeypatch.setattr(settings(), "groq_api_key", "")
+    with pytest.raises(RuntimeError, match="VOX_GROQ_API_KEY"):
+        collect(CloudLLM("openai/gpt-oss-20b", vendor="groq"), [{"role": "user", "content": "hi"}])
+
+def test_groq_models_keep_the_slash_in_their_name_and_use_the_groq_key(monkeypatch):
+    monkeypatch.setattr(settings(), "groq_api_key", "groq-key")
+    monkeypatch.setattr(settings(), "groq_base_url", "https://groq.example.com/openai/v1")
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"], seen["auth"] = str(request.url), request.headers["authorization"]
+        seen["model"] = json.loads(request.content)["model"]
+        return httpx.Response(200, content=sse({"choices": [{"delta": {"content": "ok"}}]}))
+
+    (groq,) = _build("groq:qwen/qwen3.8-27b")
+    groq.transport = httpx.MockTransport(handler)
+    collect(groq, [{"role": "user", "content": "hi"}])
+    assert seen == {"url": "https://groq.example.com/openai/v1/chat/completions", "auth": "Bearer groq-key",
+                    "model": "qwen/qwen3.8-27b"}
+
+
+def test_a_throttled_model_with_another_behind_it_hands_over_without_waiting(monkeypatch):
+    monkeypatch.setattr(settings(), "groq_api_key", "groq-key")
+    hits = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits.append(1)
+        return httpx.Response(429, headers={"retry-after": "8"}, content=b'{"error": "rate limit: tokens per minute"}')
+
+    first, last = _build("groq:qwen/qwen3.8-27b,groq:openai/gpt-oss-20b")
+    assert first.fail_fast and not last.fail_fast  # the last model still waits and retries: nothing comes after it
+    first.transport = httpx.MockTransport(handler)
+    with pytest.raises(RuntimeError, match="429"):
+        collect(first, [{"role": "user", "content": "hi"}])
+    assert len(hits) == 1
+
+
+def test_forcing_a_tool_makes_the_cloud_model_call_one_and_leaves_local_models_on_auto():
+    from app.providers import LLMEvent, llm_stream
+
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, content=sse({"choices": [{"delta": {"content": "ok"}}]}))
+
+    seen: list[dict] = []
+
+    class Local:
+        name = "ollama:test"
+
+        async def stream(self, messages, tools=None, schema=None):  # no tool_choice: forcing must not reach it
+            seen.append({"tools": tools})
+            yield LLMEvent("ok")
+
+    tools = [{"type": "function", "function": {"name": "t", "parameters": {"type": "object"}}}]
+
+    async def run(candidates, force):
+        return [e async for e in llm_stream(candidates, [{"role": "user", "content": "hi"}], tools, force_tool=force)]
+
+    cloud = CloudLLM("m", transport=httpx.MockTransport(handler))
+    asyncio.run(run([cloud], True))
+    asyncio.run(run([cloud], False))
+    asyncio.run(run([Local()], True))
+    assert [b["tool_choice"] for b in sent] == ["required", "auto"]
+    assert seen == [{"tools": tools}]
+
+
+def test_meta_models_use_the_meta_key_and_llama_api(monkeypatch):
+    monkeypatch.setattr(settings(), "meta_api_key", "LLM|1|meta-key")
+    monkeypatch.setattr(settings(), "meta_base_url", "https://llama.example.com/compat/v1")
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"], seen["auth"] = str(request.url), request.headers["authorization"]
+        seen["model"] = json.loads(request.content)["model"]
+        return httpx.Response(200, content=sse({"choices": [{"delta": {"content": "ok"}}]}))
+
+    (meta,) = _build("meta:Llama-4-Maverick-17B-128E-Instruct-FP8")
+    meta.transport = httpx.MockTransport(handler)
+    collect(meta, [{"role": "user", "content": "hi"}])
+    assert seen == {"url": "https://llama.example.com/compat/v1/chat/completions", "auth": "Bearer LLM|1|meta-key",
+                    "model": "Llama-4-Maverick-17B-128E-Instruct-FP8"}
+
+
+def test_openrouter_models_keep_their_free_suffix_and_use_the_openrouter_key(monkeypatch):
+    monkeypatch.setattr(settings(), "openrouter_api_key", "or-key")
+    monkeypatch.setattr(settings(), "openrouter_base_url", "https://or.example.com/api/v1")
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"], seen["auth"] = str(request.url), request.headers["authorization"]
+        seen["model"] = json.loads(request.content)["model"]
+        return httpx.Response(200, content=sse({"choices": [{"delta": {"content": "ok"}}]}))
+
+    (router,) = _build("openrouter:nvidia/nemotron-3.5-super-vl:free")
+    router.transport = httpx.MockTransport(handler)
+    collect(router, [{"role": "user", "content": "hi"}])
+    assert seen == {"url": "https://or.example.com/api/v1/chat/completions", "auth": "Bearer or-key",
+                    "model": "nvidia/nemotron-3.5-super-vl:free"}
+
+
+def test_nvidia_models_use_the_nvidia_key_and_endpoint(monkeypatch):
+    monkeypatch.setattr(settings(), "nvidia_api_key", "nv-key")
+    monkeypatch.setattr(settings(), "nvidia_base_url", "https://nv.example.com/v1")
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"], seen["auth"] = str(request.url), request.headers["authorization"]
+        seen["model"] = json.loads(request.content)["model"]
+        return httpx.Response(200, content=sse({"choices": [{"delta": {"content": "ok"}}]}))
+
+    (nv,) = _build("nvidia:nvidia/nemotron-3.5-lightning-30b-a3b")
+    nv.transport = httpx.MockTransport(handler)
+    collect(nv, [{"role": "user", "content": "hi"}])
+    assert seen == {"url": "https://nv.example.com/v1/chat/completions", "auth": "Bearer nv-key",
+                    "model": "nvidia/nemotron-3.5-lightning-30b-a3b"}

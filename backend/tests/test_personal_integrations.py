@@ -126,6 +126,23 @@ def test_project_notes_section_append():
 
 # ---------------------------------------------------------------- push encryption (decrypted like a browser would)
 
+def test_a_subscription_with_unusable_keys_is_dropped_instead_of_failing_the_push(monkeypatch):
+    from sqlalchemy import select
+
+    from app.db import PushSubscription
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    monkeypatch.setattr(settings(), "vapid_private_key", push.b64(key.private_numbers().private_value.to_bytes(32, "big")))
+    uid = user_id()
+    with SessionLocal() as db:
+        db.add(PushSubscription(user_id=uid, endpoint="https://push.example.com/x", p256dh="not-a-key", auth="nope"))
+        db.commit()
+    # raising here stopped the reminder job mid-loop, so one bad browser silenced everybody's reminders
+    assert asyncio.run(push.notify(uid, "Reminder", "water the plants")) == 0
+    with SessionLocal() as db:
+        assert not db.scalars(select(PushSubscription).where(PushSubscription.user_id == uid)).all()
+
+
 def test_web_push_payload_decrypts_like_a_browser(monkeypatch):
     browser = ec.generate_private_key(ec.SECP256R1())
     ua_public = push._raw_public(browser.public_key())
@@ -236,6 +253,14 @@ def test_stripe_signature_and_tier_flip(monkeypatch):
         assert db.get(User, uid).tier == "paid"
 
 
+def test_stripe_webhook_is_refused_while_no_webhook_secret_is_set():
+    event = json.dumps({"type": "checkout.session.completed", "data": {"object": {"client_reference_id": "x"}}}).encode()
+    stamp = int(time.time())
+    forged = f"t={stamp},v1=" + hmac.new(b"", f"{stamp}.".encode() + event, hashlib.sha256).hexdigest()
+    with pytest.raises(billing.BillingError):  # an empty secret is a key anyone can sign with
+        billing.verify(event, forged, "")
+
+
 # ---------------------------------------------------------------- bots
 
 def test_bot_link_code_and_confirmation():
@@ -289,3 +314,79 @@ def test_delete_account_removes_new_data(client):
     client.delete("/me", headers=headers)
     with SessionLocal() as db:
         assert load_secret(db, body["user"]["id"], "profile") is None
+
+
+def _browser_keys():
+    raw = ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+        push.serialization.Encoding.X962, push.serialization.PublicFormat.UncompressedPoint)
+    return {"p256dh": push.b64(raw), "auth": push.b64(b"0123456789abcdef")}
+
+
+def test_push_subscribe_only_accepts_real_push_services_and_keys(client):
+    headers, _ = signup(client)
+    keys = _browser_keys()
+    ok = client.post("/push/subscribe", headers=headers,
+                     json={"endpoint": "https://fcm.googleapis.com/fcm/send/abc", "keys": keys})
+    assert ok.status_code == 200
+    for endpoint in ("https://169.254.169.254/latest", "https://evil.example/fcm.googleapis.com",
+                     "https://fcm.googleapis.com.evil.example/x"):
+        r = client.post("/push/subscribe", headers=headers, json={"endpoint": endpoint, "keys": keys})
+        assert r.status_code == 422, endpoint
+    bad = client.post("/push/subscribe", headers=headers, json={
+        "endpoint": "https://updates.push.services.mozilla.com/wpush/v2/x", "keys": {"p256dh": "short", "auth": "x"}})
+    assert bad.status_code == 422
+
+
+def test_whatsapp_webhook_runs_each_message_once_and_never_errors(client, monkeypatch):
+    monkeypatch.setattr(settings(), "whatsapp_app_secret", "appsecret")
+    seen = []
+
+    async def failing(message):
+        seen.append(message["id"])
+        raise RuntimeError("download failed")
+
+    monkeypatch.setattr(bots, "whatsapp_message", failing)
+    payload = json.dumps({"entry": [{"changes": [{"value": {"messages": [{"id": "wamid.1", "from": "91"}]}}]}]}).encode()
+    sig = "sha256=" + hmac.new(b"appsecret", payload, hashlib.sha256).hexdigest()
+    for _ in range(2):  # Meta redelivers the same message
+        assert client.post("/webhooks/whatsapp", content=payload, headers={"x-hub-signature-256": sig}).status_code == 200
+    deadline = time.monotonic() + 2
+    while not seen and time.monotonic() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.05)
+    assert seen == ["wamid.1"]
+
+
+def test_bot_turns_in_one_chat_run_one_at_a_time(monkeypatch):
+    from app.api import ws
+
+    order = []
+
+    async def fake_turn(channel, user, session_id, text, *rest):
+        order.append(f"start {text}")
+        await asyncio.sleep(0.01)
+        order.append(f"end {text}")
+
+    monkeypatch.setattr(ws, "run_turn", fake_turn)
+
+    async def flow():
+        channel = bots.BotChannel(AsyncMock(), AsyncMock())
+        await asyncio.gather(bots._run(channel, None, "s", "a", None), bots._run(channel, None, "s", "b", None))
+
+    asyncio.run(flow())
+    assert order == ["start a", "end a", "start b", "end b"]
+
+
+def test_delete_account_removes_error_rows_and_live_chats(client):
+    from app.api import ws
+    from app.db import ErrorEvent, record_error
+
+    headers, body = signup(client)
+    uid = body["user"]["id"]
+    chat = client.post("/sessions", headers=headers).json()["id"]
+    ws._channels[chat] = ws.Channel()
+    record_error("turn", "boom", uid)
+    client.delete("/me", headers=headers)
+    assert chat not in ws._channels
+    with SessionLocal() as db:
+        assert db.query(ErrorEvent).filter(ErrorEvent.user_id == uid).count() == 0

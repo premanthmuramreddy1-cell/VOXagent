@@ -211,13 +211,21 @@ class CloudLLM:
     duplicate text already spoken, so once anything is emitted a failure is final.
     """
 
-    def __init__(self, model: str, transport: httpx.AsyncBaseTransport | None = None):
-        self.model, self.name, self.transport = model, f"cloud:{model}", transport
+    def __init__(self, model: str, transport: httpx.AsyncBaseTransport | None = None, vendor: str = "cloud"):
+        # vendor picks the key and base URL: "cloud" uses VOX_LLM_*, "groq" VOX_GROQ_*, "meta" VOX_META_*, so a throttled cloud hands
+        # the turn to another one
+        self.model, self.name, self.transport, self.vendor = model, f"{vendor}:{model}", transport, vendor
+        self.fail_fast = False  # set by _build for every model that has another one after it
 
-    async def stream(self, messages, tools=None, schema=None, _plain=False):
+    def _endpoint(self) -> tuple[str, str]:
+        prefix = "llm" if self.vendor == "cloud" else self.vendor
         cfg = settings()
-        if not cfg.llm_api_key:
-            raise RuntimeError("VOX_LLM_API_KEY is not set")
+        return getattr(cfg, f"{prefix}_api_key"), getattr(cfg, f"{prefix}_base_url")
+
+    async def stream(self, messages, tools=None, schema=None, _plain=False, tool_choice="auto"):
+        key, base = self._endpoint()
+        if not key:
+            raise RuntimeError(f"VOX_{'LLM' if self.vendor == 'cloud' else self.vendor.upper()}_API_KEY is not set")
         body: dict[str, Any] = {
             "model": self.model,
             "messages": _openai_messages(messages, schema),
@@ -226,13 +234,13 @@ class CloudLLM:
         }
         if tools:
             body["tools"] = tools
-            body["tool_choice"] = "auto"
+            body["tool_choice"] = tool_choice
         if schema:  # structured calls: low temperature and a hard cap so a small model cannot loop
             body["response_format"] = {"type": "json_object"}
             body["temperature"] = 0.1
             body["max_tokens"] = 1500
-        url = f"{cfg.llm_base_url.rstrip('/')}/chat/completions"
-        headers = {"Authorization": f"Bearer {cfg.llm_api_key}"}
+        url = f"{base.rstrip('/')}/chat/completions"
+        headers = {"Authorization": f"Bearer {key}"}
         for attempt in range(1, CLOUD_ATTEMPTS + 1):
             wait = CLOUD_BACKOFF_S[min(attempt - 1, len(CLOUD_BACKOFF_S) - 1)]
             async with httpx.AsyncClient(timeout=120, transport=self.transport) as http:
@@ -244,7 +252,9 @@ class CloudLLM:
                             async for evt in self.stream(messages, tools=None, schema=schema):
                                 yield evt
                             return
-                        retryable = response.status_code == 429 or response.status_code >= 500
+                        # with another model behind this one, a throttled reply hands the turn over now: waiting
+                        # out a rate limit stalls a spoken answer for seconds
+                        retryable = (response.status_code == 429 or response.status_code >= 500) and not self.fail_fast
                         if response.status_code == 429 and _out_of_quota(response.headers.get("retry-after"), detail):
                             retryable = False  # minutes or a day away: the next provider (a local model) answers now
                         if not retryable or attempt == CLOUD_ATTEMPTS:
@@ -352,6 +362,10 @@ _FACTORIES: dict[str, Callable[[str], Any]] = {
     "ollama": OllamaLLM,
     "cloud": CloudLLM,
     "openai": CloudLLM,  # alias: the protocol, not the vendor
+    "groq": lambda model: CloudLLM(model, vendor="groq"),
+    "meta": lambda model: CloudLLM(model, vendor="meta"),
+    "openrouter": lambda model: CloudLLM(model, vendor="openrouter"),
+    "nvidia": lambda model: CloudLLM(model, vendor="nvidia"),
     "whisper": WhisperSTT,
     "say": lambda _arg: SayTTS(),
 }
@@ -363,6 +377,9 @@ def _build(spec: str) -> list[Any]:
     for item in spec.split(","):
         kind, _, arg = item.strip().partition(":")
         out.append(_FACTORIES[kind](arg))
+    for provider in out[:-1]:
+        if hasattr(provider, "fail_fast"):
+            provider.fail_fast = True
     return out
 
 
@@ -394,7 +411,8 @@ async def first_ok(stage: str, candidates: Sequence[P], call: Callable[[P], Awai
 
 
 async def llm_stream(
-    candidates: Sequence[LLM], messages: list[dict], tools: list[dict] | None = None, schema: dict | None = None
+    candidates: Sequence[LLM], messages: list[dict], tools: list[dict] | None = None, schema: dict | None = None,
+    force_tool: bool = False,
 ) -> AsyncIterator[LLMEvent]:
     """Stream from the first LLM that works. Falls back only if nothing was emitted yet.
 
@@ -403,7 +421,9 @@ async def llm_stream(
     """
     for provider in candidates:
         started = False
-        stream = provider.stream(messages, tools, schema).__aiter__()
+        # force_tool: cloud models must call one of the tools; others cannot be forced and keep "auto"
+        extra = {"tool_choice": "required"} if force_tool and tools and isinstance(provider, CloudLLM) else {}
+        stream = provider.stream(messages, tools, schema, **extra).__aiter__()
         try:
             try:
                 first = (await stream.__anext__() if provider is candidates[-1]

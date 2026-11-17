@@ -3,7 +3,9 @@ request reaches without side effects.   uv run python -m scripts.routing_check
 """
 
 import asyncio
+import os
 import sys
+import time
 
 from app.agent import Agent, Turn
 from app.providers import providers
@@ -12,6 +14,7 @@ from app.skills import SkillResult, discover
 MS_FORM = "https://forms.cloud.microsoft/Pages/ResponsePage.aspx?id=EXAMPLE-FORM-ID"  # any form link: tools are stubbed
 COFFEE = [{"role": "user", "content": "build a website for a coffee shop"},
           {"role": "assistant", "content": "I built the coffee shop website."}]
+PACE = float(os.environ.get("ROUTING_PACE", "0"))  # seconds between prompts
 CASES = [  # (prompt, history, skills that count as right)
     (f"fill this form {MS_FORM}", [], {"fill_form"}),
     (f"answer the questions in this quiz and submit it {MS_FORM}", [], {"fill_form"}),
@@ -72,17 +75,22 @@ async def main() -> int:
             return SkillResult(f"{name} done (test stub).", {})
         object.__setattr__(skill, "run", run) if hasattr(skill, "__dict__") else None
     agent = Agent(providers().llm, skills)
-    misses = 0
+    misses, total = 0, 0.0
     for prompt, history, good in CASES:
         called.clear()
+        await asyncio.sleep(PACE)  # free tiers allow a few thousand tokens a minute: test at a person's pace
+        start = time.perf_counter()
         try:
             answer, _ = await agent.run(Turn("routing-check", "routing-check", prompt, _noop, _yes, [], history))
         except Exception as exc:
             answer = f"ERROR {exc}"
         ok = bool(good & set(called)) if good else not called  # chat must not run any tool
         misses += not ok
-        print(f"{'PASS' if ok else 'MISS'} | {prompt[:50]:50} | called={called} | {answer[:90]!r}", flush=True)
-    print(f"{len(CASES) - misses}/{len(CASES)} routed right")
+        took = time.perf_counter() - start
+        total += took
+        print(f"{'PASS' if ok else 'MISS'} | {took:4.1f}s | {prompt[:50]:50} | called={called} | {answer[:80]!r}",
+              flush=True)
+    print(f"{len(CASES) - misses}/{len(CASES)} routed right, {total / len(CASES):.1f}s per request on average")
     return 1 if misses else 0
 
 

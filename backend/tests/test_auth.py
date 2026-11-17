@@ -1,3 +1,4 @@
+import pytest
 import asyncio
 from unittest.mock import AsyncMock
 
@@ -62,6 +63,30 @@ def test_admin_email_cannot_be_claimed_by_a_remote_password_sign_up(monkeypatch)
     assert r.status_code == 200 and r.json()["user"]["is_admin"] is False
 
 
+def test_locked_sign_up_refuses_strangers_and_tunnelled_requests(client, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    monkeypatch.setattr(settings(), "allowed_emails", ["locked@example.com"])
+    _hits.clear()  # earlier tests used these addresses; the sign-up rate limit counts per address
+    body = {"email": "locked@example.com", "password": "password123", "name": "X"}
+    stranger = TestClient(app, client=("203.0.113.9", 40000))
+    assert stranger.post("/auth/signup", json=body).status_code == 403  # an unverified email, even a listed one
+    tunnel = TestClient(app, client=("127.0.0.1", 40000))  # cloudflared connects from this Mac too
+    assert tunnel.post("/auth/signup", json=body, headers={"cf-connecting-ip": "203.0.113.9"}).status_code == 403
+    assert tunnel.post("/auth/signup", json=body).status_code == 200  # the owner, on the Mac itself
+
+
+def test_locked_google_sign_in_admits_only_listed_emails(client, monkeypatch):
+    monkeypatch.setattr(settings(), "google_client_id", "cid")
+    monkeypatch.setattr(settings(), "allowed_emails", ["g@example.com"])
+    monkeypatch.setattr(auth_api, "_google_claims", AsyncMock(return_value=_claims(email="x@example.com")))
+    assert client.post("/auth/google", json={"credential": "tok"}).status_code == 403
+    monkeypatch.setattr(auth_api, "_google_claims", AsyncMock(return_value=_claims()))
+    assert client.post("/auth/google", json={"credential": "tok"}).status_code == 200
+
+
 def test_export_then_delete_removes_account(client):
     headers, _ = signup(client, "gone@example.com")
     client.patch("/me", headers=headers, json={"preferred_language": "te"})
@@ -117,3 +142,38 @@ def test_google_claims_rejects_a_token_google_refuses():
     assert asyncio.run(auth_api._google_claims("tok", transport)) is None
     ok = httpx.MockTransport(lambda req: httpx.Response(200, json=_claims()))
     assert asyncio.run(auth_api._google_claims("tok", ok))["email"] == "g@example.com"
+
+
+def _request(host, headers=()):
+    from starlette.requests import Request
+
+    return Request({"type": "http", "client": (host, 1), "path": "/auth/login",
+                    "headers": [(k.encode(), v.encode()) for k, v in headers]})
+
+
+def test_rate_limit_counts_each_tunnel_caller_separately(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.security import client_ip, rate_limit
+
+    monkeypatch.setattr(settings(), "auth_rate_per_min", 1)
+    _hits.clear()
+    # behind the tunnel everyone arrives from 127.0.0.1: one caller must not use up everyone's attempts
+    rate_limit(_request("127.0.0.1", [("cf-connecting-ip", "203.0.113.5")]))
+    rate_limit(_request("127.0.0.1", [("cf-connecting-ip", "198.51.100.7")]))
+    with pytest.raises(HTTPException):
+        rate_limit(_request("127.0.0.1", [("cf-connecting-ip", "203.0.113.5")]))
+    # a direct caller cannot dodge its own limit by claiming another address
+    assert client_ip(_request("198.51.100.9", [("x-forwarded-for", "1.2.3.4")])) == "198.51.100.9"
+    _hits.clear()
+
+
+def test_rate_limit_forgets_idle_callers(monkeypatch):
+    from app import security
+
+    _hits.clear()
+    for i in range(10_001):
+        _hits[f"10.0.{i}:/auth/login"].append(-1000.0)
+    security.rate_limit(_request("127.0.0.1"))
+    assert len(_hits) == 1
+    _hits.clear()

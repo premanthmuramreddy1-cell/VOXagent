@@ -29,6 +29,12 @@ def test_agent_restates_then_answers_plain_question():
     assert "".join(p["text"] for t, p in rec.events if t == "answer.delta") == "Hello there."
 
 
+def test_agent_answers_when_the_plan_leaves_out_optional_fields():
+    partial = {"restatement": "Say hello", "language": "en", "steps": []}  # small models drop "unclear"/"question"
+    answer, _ = run(Agent([FakeLLM(partial, "Hello there.")], {}), Recorder())
+    assert answer == "Hello there."
+
+
 def test_agent_runs_planned_skill_and_ticks_checklist():
     echo = EchoSkill()
     llm = FakeLLM(plan([("Echo it", "echo"), ("Echo again", "echo")]), call(text="hi"), "I echoed hi.")
@@ -43,6 +49,21 @@ def test_agent_runs_planned_skill_and_ticks_checklist():
     assert llm.calls[1]["tools"][0]["function"]["name"] == "echo"
     assert llm.calls[2]["tools"] is None  # the skill already ran
     assert llm.calls[2]["messages"][-1]["content"] == "<data>echoed hi</data>"  # tool output is fenced as data
+
+
+def test_a_planned_skill_is_forced_on_the_first_round_only(monkeypatch):
+    import app.agent as agent_mod
+
+    forced = []
+
+    def spy(llms, messages, tools=None, schema=None, force_tool=False):
+        forced.append(force_tool)
+        return llm_stream(llms, messages, tools, schema)
+
+    monkeypatch.setattr(agent_mod, "llm_stream", spy)
+    run(Agent([FakeLLM(plan([("Echo it", "echo")]), call(text="hi"), "done")], {"echo": EchoSkill()}), Recorder())
+    run(Agent([FakeLLM(plan(), "Just chatting.")], {"echo": EchoSkill()}), Recorder())
+    assert forced == [False, True, False, False, False]  # plan, forced call, free answer; then plan, chat
 
 
 def test_agent_keeps_tool_call_id_and_signature_in_history():

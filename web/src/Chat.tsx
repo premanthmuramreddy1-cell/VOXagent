@@ -519,6 +519,7 @@ export default function Chat() {
           setError({ message: event.message })
           return setBusy(false)
         }
+        if (event.type === 'turn.started') setBusy(true)
         if (event.type === 'tts.stop') player.current.stop()
         if (event.type === 'swarm.build') playBuild(event as any)
         if (event.type === 'world.briefing') playNews(event as unknown as Briefing)

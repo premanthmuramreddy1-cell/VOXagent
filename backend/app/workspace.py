@@ -11,7 +11,9 @@ import io
 import json
 import os
 import re
+import unicodedata
 import zipfile
+import zlib
 from pathlib import Path
 
 from sqlalchemy import select
@@ -53,7 +55,7 @@ def safe_path(base: Path, rel: str) -> Path:
     path = (base / rel).resolve()
     if not path.is_relative_to(base) or path == base:
         raise WorkspaceError(f"{rel} is outside the workspace")
-    if ".git" in path.relative_to(base).parts:
+    if ".git" in (part.lower() for part in path.relative_to(base).parts):  # macOS opens .GIT as .git
         raise WorkspaceError("the .git folder is managed by VoxAgent")
     return path
 
@@ -118,7 +120,9 @@ async def undo(base: Path) -> str:
 # ---------------------------------------------------------------- workspace rows
 
 async def create(db: Session, user_id: str, name: str) -> Workspace:
-    name = re.sub(r"[^\w .-]+", "", name).strip()[:60] or "project"
+    # letters, digits and the marks that complete them: Indic vowel signs are marks, which \w leaves out
+    keep = (c for c in name if c.isalnum() or c in " ._-" or unicodedata.category(c)[0] == "M")
+    name = "".join(keep).strip()[:60] or "project"
     ws = Workspace(user_id=user_id, name=name)
     db.add(ws)
     db.commit()
@@ -318,28 +322,41 @@ async def apply_changes(db: Session, ws: Workspace, ids: list[str] | None = None
     chosen = [c for c in pending(db, ws) if ids is None or c.id in ids]
     if not chosen:
         raise WorkspaceError("there are no staged changes to apply")
-    base = root(ws)
+    base, done, failure = root(ws), [], ""
     for change in chosen:
-        target = safe_path(base, change.path)
-        if change.kind == "write":
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(change.content or "", encoding="utf-8")
-        elif change.kind == "delete" and target.exists():
-            if target.is_dir():
-                for path in sorted(target.rglob("*"), reverse=True):
-                    path.unlink() if path.is_file() or path.is_symlink() else path.rmdir()
-                target.rmdir()
-            else:
-                target.unlink()
-        elif change.kind == "rename":
-            dest = safe_path(base, change.new_path)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            target.rename(dest)
+        try:
+            _apply_one(base, change)
+        except (OSError, WorkspaceError) as exc:
+            failure = f"could not {change.kind} {change.path}: {getattr(exc, 'strerror', None) or exc}"
+            break
         db.delete(change)
+        done.append(change)
     db.commit()
-    summary = ", ".join(sorted({f"{c.kind} {c.path}" for c in chosen}))[:180]
-    sha = await commit(base, f"voxagent: {summary}")
-    return {"applied": len(chosen), "commit": sha, "remaining": len(pending(db, ws))}
+    sha = None
+    if done:
+        summary = ", ".join(sorted({f"{c.kind} {c.path}" for c in done}))[:180]
+        sha = await commit(base, f"voxagent: {summary}")
+    if failure:  # the applied ones stay applied and committed; the rest stay staged to retry
+        raise WorkspaceError(f"{failure} ({len(done)} applied, {len(chosen) - len(done)} still staged)")
+    return {"applied": len(done), "commit": sha, "remaining": len(pending(db, ws))}
+
+
+def _apply_one(base: Path, change: PendingChange) -> None:
+    target = safe_path(base, change.path)
+    if change.kind == "write":
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(change.content or "", encoding="utf-8")
+    elif change.kind == "delete" and target.exists():
+        if target.is_dir():
+            for path in sorted(target.rglob("*"), reverse=True):
+                path.unlink() if path.is_file() or path.is_symlink() else path.rmdir()
+            target.rmdir()
+        else:
+            target.unlink()
+    elif change.kind == "rename":
+        dest = safe_path(base, change.new_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        target.rename(dest)
 
 
 def reject_changes(db: Session, ws: Workspace, ids: list[str] | None = None) -> int:
@@ -357,8 +374,9 @@ def import_zip(base: Path, blob: bytes) -> int:
     try:
         archive = zipfile.ZipFile(io.BytesIO(blob))
     except zipfile.BadZipFile:
-        raise WorkspaceError("that is not a zip file") from None
+        raise WorkspaceError("that is not a zip file, or the upload was cut off") from None
     names = [i for i in archive.infolist() if not i.is_dir()]
+    files: list[tuple[Path, bytes]] = []
     tops = {i.filename.split("/", 1)[0] for i in names}
     nested = all("/" in i.filename for i in names)
     prefix = f"{tops.pop()}/" if len(tops) == 1 and nested else ""  # strip one top folder (GitHub zips have one)
@@ -371,8 +389,14 @@ def import_zip(base: Path, blob: bytes) -> int:
         if total > limit:
             raise WorkspaceError(f"the project is larger than {limit // 1_000_000} MB")
         target = safe_path(base, name)  # refuses zip-slip paths like ../../etc
+        try:
+            files.append((target, archive.read(info)))
+        except (zipfile.BadZipFile, zlib.error, EOFError):
+            raise WorkspaceError(f"the zip file is damaged at {name}") from None
+    # written only once every file checked out, so a refused import leaves the workspace untouched
+    for target, data in files:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(archive.read(info))
+        target.write_bytes(data)
         count += 1
     return count
 

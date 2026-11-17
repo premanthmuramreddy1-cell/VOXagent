@@ -58,8 +58,8 @@ def test_text_turn_streams_answer_and_persists(client, token, fake):
     sock = connect(client, session_id, token)
     sock.send_json({"type": "text.input", "text": "say hello"})
     events, audio = collect(sock)
-    assert types(events) == ["agent.restate", "answer.delta", "answer.delta", "answer.done", "turn.done"]
-    assert [e["seq"] for e in events] == [1, 2, 3, 4, 5]
+    assert types(events) == ["turn.started", "agent.restate", "answer.delta", "answer.delta", "answer.done", "turn.done"]
+    assert [e["seq"] for e in events] == [1, 2, 3, 4, 5, 6]
     assert audio == []  # speech was not requested
     saved = client.get(f"/sessions/{session_id}/messages", headers=headers).json()
     assert [(m["role"], m["text"]) for m in saved] == [("user", "say hello"), ("assistant", "Hello there.")]
@@ -96,7 +96,7 @@ def test_voice_turn_transcribes_and_normalizes_code_terms(client, token, fake):
     sock.send_bytes(b"\x00\x01" * 8000)
     sock.send_json({"type": "audio.stop"})
     events, _ = collect(sock)
-    assert events[0] == {"type": "transcript.final", "seq": 1, "text": "go to line 42", "language": "en"}
+    assert events[1] == {"type": "transcript.final", "seq": 2, "text": "go to line 42", "language": "en"}
     assert llm.calls[0]["messages"][-1]["content"] == "go to line 42"
 
 
@@ -108,7 +108,7 @@ def test_unclear_speech_asks_instead_of_guessing(client, token, fake):
     sock.send_bytes(b"\x00\x01" * 100)
     sock.send_json({"type": "audio.stop", "speak": True})
     events, audio = collect(sock)
-    assert types(events) == ["transcript.final", "clarify", "turn.done"]
+    assert types(events) == ["turn.started", "transcript.final", "clarify", "turn.done"]
     assert llm.calls == [] and len(audio) == 1
 
 
@@ -118,6 +118,9 @@ def test_socket_rejects_bad_token_and_other_users_session(client, token, fake):
         with client.websocket_connect(f"/ws/sessions/{session_id}") as sock:
             sock.send_json({"type": "auth", "token": bad})
             assert sock.receive()["code"] == 4401
+    with client.websocket_connect(f"/ws/sessions/{session_id}") as sock:
+        sock.send_bytes(b"\x00\x01")  # audio before signing in
+        assert sock.receive()["code"] == 4401
 
 
 def test_reconnect_resumes_missed_events(client, token, fake):
@@ -139,7 +142,7 @@ def test_llm_outage_reports_retryable_error(client, token, fake):
     sock = connect(client, session_id, token)
     sock.send_json({"type": "text.input", "text": "hi"})
     events, _ = collect(sock)
-    assert events[0]["code"] == "provider_failed" and events[0]["retryable"] is True
+    assert events[1]["code"] == "provider_failed" and events[1]["retryable"] is True
 
 
 def test_barge_in_stops_the_agent(client, token, monkeypatch):
@@ -203,7 +206,7 @@ def test_free_tier_daily_message_limit(client, token, fake, monkeypatch):
     sock = connect(client, session_id, token)
     sock.send_json({"type": "text.input", "text": "hi"})
     events, _ = collect(sock)
-    assert events[0]["code"] == "limit"
+    assert events[1]["code"] == "limit"
 
 
 def test_oversized_audio_and_malformed_messages_are_rejected(client, token, fake, monkeypatch):
@@ -218,3 +221,73 @@ def test_oversized_audio_and_malformed_messages_are_rejected(client, token, fake
     assert sock.receive_json()["code"] == "bad_message"
     sock.send_json({"type": "nope"})
     assert sock.receive_json()["code"] == "bad_message"
+
+
+def test_a_new_message_mid_turn_ends_the_old_turn_before_the_new_one_starts(client, token, monkeypatch):
+    class SlowThenQuick:
+        name = "slow"
+        answers = 0
+
+        async def stream(self, messages, tools=None, schema=None):
+            if schema:
+                yield LLMEvent(json.dumps(plan()))
+                return
+            SlowThenQuick.answers += 1
+            if SlowThenQuick.answers == 1:
+                yield LLMEvent("One moment. ")
+                await asyncio.sleep(30)
+            yield LLMEvent("Second answer.")
+
+    monkeypatch.setattr(prov, "providers", lambda: prov.Providers([SlowThenQuick()], [FakeSTT()], [FakeTTS()]))
+    session_id, _ = open_session(client, token)
+    sock = connect(client, session_id, token)
+    sock.send_json({"type": "text.input", "text": "talk for a while"})
+    collect(sock, stop="answer.delta")
+    sock.send_json({"type": "text.input", "text": "never mind"})
+    events, _ = collect(sock, stop="answer.done")
+    rest = types(events)
+    # the old turn closes first; nothing after the new turn starts may say the agent is idle
+    assert rest.index("turn.done") < rest.index("turn.started")
+    after = rest[rest.index("turn.started"):]
+    assert "turn.done" not in after and "tts.stop" not in after
+    assert events[-1]["text"] == "Second answer."
+
+
+def test_an_upgrade_applies_to_an_already_open_socket(client, token, fake, monkeypatch):
+    from app.db import SessionLocal, User
+
+    fake(plan(), "Hello.")
+    monkeypatch.setattr(settings(), "free_daily_messages", 0)
+    session_id, _ = open_session(client, token)
+    sock = connect(client, session_id, token)
+    sock.send_json({"type": "text.input", "text": "hi"})
+    events, _ = collect(sock)
+    assert events[1]["code"] == "limit"
+    with SessionLocal() as db:
+        for user in db.query(User).all():
+            user.tier = "pro"
+        db.commit()
+    sock.send_json({"type": "text.input", "text": "hi again"})
+    events, _ = collect(sock)
+    assert "answer.done" in types(events)
+
+
+def test_an_empty_or_odd_length_recording_does_not_crash(client, token, fake):
+    class WholeSamples(FakeSTT):
+        async def transcribe(self, pcm, language=None):
+            if not pcm or len(pcm) % 2:  # whisper's np.frombuffer(int16) raises on these
+                raise ValueError("buffer size must be a multiple of element size")
+            return self.result
+
+    fake(plan(), "Ok.", stt=WholeSamples("hello", "en"))
+    session_id, _ = open_session(client, token)
+    sock = connect(client, session_id, token)
+    sock.send_json({"type": "audio.start"})
+    sock.send_json({"type": "audio.stop"})  # nothing was recorded
+    events, _ = collect(sock)
+    assert types(events) == ["turn.started", "clarify", "turn.done"]
+    sock.send_json({"type": "audio.start"})
+    sock.send_bytes(b"\x00\x01" * 100 + b"\x00")  # a dropped byte leaves half a sample
+    sock.send_json({"type": "audio.stop"})
+    events, _ = collect(sock)
+    assert "answer.done" in types(events)

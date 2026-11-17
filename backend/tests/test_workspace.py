@@ -34,7 +34,7 @@ def test_new_workspace_is_a_git_repo_with_notes(ws):
 
 def test_paths_cannot_escape_the_workspace(ws):
     _, _, base = ws
-    for bad in ("../x", "/../../etc/passwd", ".git/config", "a/../../b", ""):
+    for bad in ("../x", "/../../etc/passwd", ".git/config", ".GIT/config", "a/../../b", ""):  # macOS ignores case
         with pytest.raises(WorkspaceError):
             wsp.safe_path(base, bad)
     assert wsp.safe_path(base, "/src/app.py") == base / "src" / "app.py"
@@ -131,3 +131,40 @@ def test_search_and_binary_files(ws):
     assert wsp.search(base, "NEEDLE") == [{"path": "a.txt", "line": 1, "text": "needle here"}]
     with pytest.raises(WorkspaceError, match="binary"):
         wsp.read_text(base / "b.bin")
+
+
+def test_a_refused_zip_import_writes_nothing(ws, monkeypatch):
+    from app.config import settings
+
+    _, _, base = ws
+    monkeypatch.setattr(settings(), "max_workspace_bytes", 10)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("a.txt", "small")
+        archive.writestr("b.txt", "this one is over the limit")
+    with pytest.raises(WorkspaceError):
+        wsp.import_zip(base, buffer.getvalue())
+    assert wsp.list_files(base) == ["NOTES.md"]
+
+
+def test_a_damaged_zip_is_reported_as_damaged(ws):
+    _, _, base = ws
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("a.txt", "hello " * 1000)
+    blob = bytearray(buffer.getvalue())
+    blob[40:60] = b"\x00" * 20  # corrupt the compressed data, keep the directory readable
+    with pytest.raises(WorkspaceError, match="damaged"):
+        wsp.import_zip(base, bytes(blob))
+    assert wsp.list_files(base) == ["NOTES.md"]
+
+
+def test_a_failing_change_keeps_the_applied_ones_and_stages_the_rest(ws):
+    db, space, base = ws
+    wsp.stage_write(db, space, "first.txt", "one")
+    wsp.stage_write(db, space, "second.txt", "two")
+    (base / "second.txt").mkdir()  # writing a file over a folder fails
+    with pytest.raises(WorkspaceError, match="1 applied, 1 still staged"):
+        asyncio.run(wsp.apply_changes(db, space))
+    assert (base / "first.txt").read_text() == "one"
+    assert [c.path for c in wsp.pending(db, space)] == ["second.txt"]

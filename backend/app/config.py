@@ -22,6 +22,18 @@ class Settings(BaseSettings):
     llm: str = "cloud:gemini-3.1-flash-lite,cloud:gemini-3.5-flash-lite,ollama:llama3.2"
     llm_api_key: str = ""  # Gemini key from aistudio.google.com/apikey (or Groq, OpenRouter, z.ai with their base URL)
     llm_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    # groq:<model> in `llm`: models served by Groq (fast first tokens), a key from console.groq.com/keys
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    # meta:<model> in `llm`: Meta's Llama API (OpenAI-compatible), a key from llama.developer.meta.com
+    meta_api_key: str = ""
+    meta_base_url: str = "https://api.llama.com/compat/v1"
+    # openrouter:<model> in `llm`: any model OpenRouter serves, a key from openrouter.ai/keys
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    # nvidia:<model> in `llm`: NVIDIA's hosted models (build.nvidia.com), a key from there
+    nvidia_api_key: str = ""
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
     stt: str = "whisper:small"
     tts: str = "say"
     ollama_url: str = "http://localhost:11434"
@@ -79,6 +91,8 @@ class Settings(BaseSettings):
     free_daily_reviews: int = 10
     auth_rate_per_min: int = 10
     admin_emails: list[str] = []
+    # set when VoxAgent is reachable from the internet: only these emails may create an account from outside this Mac
+    allowed_emails: list[str] = []
 
 
 @lru_cache

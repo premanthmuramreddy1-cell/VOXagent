@@ -1,6 +1,7 @@
 """Memory, notes, reminders, settings, push subscriptions and the encrypted form-filling profile."""
 
 import re
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -197,6 +198,9 @@ def get_briefing(user: User = Depends(current_user), db: Session = Depends(get_d
 
 # ---------------------------------------------------------------- push
 
+PUSH_HOSTS = ("fcm.googleapis.com", "push.services.mozilla.com", "push.apple.com", "notify.windows.com")
+
+
 class PushBody(BaseModel):
     endpoint: str = Field(pattern=r"^https://")
     keys: dict[str, str]
@@ -211,6 +215,15 @@ def push_key() -> dict:
 def subscribe(body: PushBody, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
     if not {"p256dh", "auth"} <= body.keys.keys():
         raise HTTPException(422, "subscription keys missing")
+    host = urlparse(body.endpoint).hostname or ""
+    if not any(host == h or host.endswith("." + h) for h in PUSH_HOSTS):  # else the server posts wherever it is told
+        raise HTTPException(422, "not a browser push service")
+    try:
+        valid = len(push.unb64(body.keys["p256dh"])) == 65 and len(push.unb64(body.keys["auth"])) == 16
+    except ValueError:
+        valid = False
+    if not valid:
+        raise HTTPException(422, "subscription keys are malformed")
     existing = db.scalar(select(PushSubscription).where(PushSubscription.endpoint == body.endpoint))
     if existing:
         db.delete(existing)

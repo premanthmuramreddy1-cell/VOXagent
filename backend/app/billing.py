@@ -45,6 +45,8 @@ async def checkout_url(user: User) -> str:
 
 def verify(payload: bytes, header: str, secret: str, now: float | None = None) -> None:
     """Stripe-Signature: t=<ts>,v1=<hex hmac of "<ts>.<payload>">; rejects stale or forged events."""
+    if not secret:  # an empty key is one anyone can sign with: unconfigured payments accept no events
+        raise BillingError("payments are not configured on this server")
     parts = dict(item.split("=", 1) for item in header.split(",") if "=" in item)
     try:
         stamp = int(parts["t"])

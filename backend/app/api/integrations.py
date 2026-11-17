@@ -139,7 +139,7 @@ async def whatsapp_webhook(request: Request) -> dict:
     for entry in json.loads(payload).get("entry", []):
         for change in entry.get("changes", []):
             for message in change.get("value", {}).get("messages", []):
-                await bots.whatsapp_message(message)
+                bots.whatsapp_receive(message)
     return {"ok": True}
 
 

@@ -5,7 +5,7 @@ audio.start, audio.stop {speak?}, barge_in, cancel, confirm {id, decision}, resu
 Binary frames are 16 kHz mono 16-bit PCM while recording.
 Server -> client (JSON, each with seq): ready, transcript.partial, transcript.final, agent.restate,
 plan.created, plan.step, tool.started, tool.finished, answer.delta, answer.done, clarify,
-confirm.request, tts.stop, error {code, retryable, message}. Binary frames are WAV speech.
+confirm.request, tts.stop, turn.started, turn.done, error {code, retryable, message}. Binary frames are WAV speech.
 """
 
 import asyncio
@@ -205,8 +205,8 @@ async def _turn(channel: Channel, user: User, session_id: str, text: str, pcm: b
                 upload_ids: list[str], speaker: Speaker) -> None:
     language = user.preferred_language
     if pcm is not None:
-        transcript = await _transcribe(channel, user, pcm)
-        if not transcript.confident:  # ask instead of guessing
+        transcript = await _transcribe(channel, user, pcm) if pcm else None
+        if transcript is None or not transcript.confident:  # ask instead of guessing
             await speaker.emit("clarify", question=SORRY)
             return await speaker.finish()
         text, language = transcript.text, transcript.language
@@ -229,7 +229,10 @@ async def _turn(channel: Channel, user: User, session_id: str, text: str, pcm: b
 
 async def run_turn(channel: Channel, user: User, session_id: str, text: str, pcm: bytes | None,
                    upload_ids: list[str], speak: bool) -> None:
+    with SessionLocal() as db:  # a socket lives for hours: tier and language changes must apply to the next turn
+        user = db.get(User, user.id) or user
     speaker = Speaker(channel, user.id, speak, time.perf_counter())
+    await channel.emit("turn.started")
     try:
         await _turn(channel, user, session_id, text, pcm, upload_ids, speaker)
     except asyncio.CancelledError:
@@ -251,7 +254,7 @@ async def run_turn(channel: Channel, user: User, session_id: str, text: str, pcm
 async def _partial(channel: Channel) -> None:
     try:
         stt = prov.providers().stt[0]
-        transcript = await stt.transcribe(bytes(channel.audio))
+        transcript = await stt.transcribe(bytes(channel.audio[: len(channel.audio) // 2 * 2]))
         if channel.recording and transcript.text:
             await channel.emit("transcript.partial", text=transcript.text)
     except Exception as exc:  # partials are best effort; the final transcript reports real failures
@@ -287,10 +290,12 @@ async def _dispatch(channel: Channel, user: User, session_id: str, msg: dict) ->
         channel.audio.clear()
         channel.recording, channel.partial_at = True, 0
     elif kind in ("text.input", "audio.stop"):
-        channel.cancel_turn()
+        old = channel.turn
+        if channel.cancel_turn() and old:
+            await asyncio.wait([old])  # its tts.stop/turn.done must land before the new turn starts, not inside it
         pcm = None
         if kind == "audio.stop":
-            channel.recording, pcm = False, bytes(channel.audio)
+            channel.recording, pcm = False, bytes(channel.audio[: len(channel.audio) // 2 * 2])
             channel.audio.clear()
         uploads = [str(u) for u in msg.get("upload_ids", [])][:5]
         channel.turn = asyncio.create_task(
@@ -325,7 +330,8 @@ async def voice(ws: WebSocket, session_id: str) -> None:
             chat = db.get(ChatSession, session_id)
             if not chat or chat.user_id != user.id:
                 raise HTTPException(404)
-    except (HTTPException, TimeoutError, ValueError, AttributeError, WebSocketDisconnect):
+    # KeyError: the first frame was binary (audio before signing in), which has no text to parse
+    except (HTTPException, TimeoutError, ValueError, AttributeError, KeyError, WebSocketDisconnect):
         await ws.close(4401)
         return
     _prune_channels()

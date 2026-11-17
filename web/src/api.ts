@@ -113,6 +113,10 @@ type Handlers = {
   onStatus: (online: boolean) => void
 }
 
+/** The last event number to count as seen once the server says where it is. First connect: the server's position.
+ *  A server behind us restarted and counts from zero again: keeping our old number would drop every new event. */
+export const resumeFrom = (last: number, server: number) => (last < 0 || server < last ? server : last)
+
 /** WebSocket that reconnects with backoff and asks the server to replay what it missed. */
 export class Socket {
   private ws?: WebSocket
@@ -133,8 +137,10 @@ export class Socket {
     if (this.closed) return
     if (!token) await refresh() // a socket opened without a token is closed with 4401 and drops the first message
     if (this.closed) return
+    // VITE_WS_URL: the backend's own address when the app is hosted elsewhere (Vercel cannot carry sockets)
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${scheme}://${location.host}/ws/sessions/${this.sessionId}`)
+    const base = import.meta.env.VITE_WS_URL || `${scheme}://${location.host}`
+    const ws = new WebSocket(`${base}/ws/sessions/${this.sessionId}`)
     ws.binaryType = 'arraybuffer'
     ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', token }))
     ws.onmessage = (message) => {
@@ -144,8 +150,9 @@ export class Socket {
         this.delay = 500
         this.handlers.onStatus(true)
         // First connect: history comes from REST, so start at the server's position.
-        if (this.lastSeq < 0) this.lastSeq = event.seq ?? 0
-        else if ((event.seq ?? 0) > this.lastSeq) this.send({ type: 'resume', last_seq: this.lastSeq })
+        const seq = event.seq ?? 0
+        if (this.lastSeq >= 0 && seq > this.lastSeq) this.send({ type: 'resume', last_seq: this.lastSeq })
+        this.lastSeq = resumeFrom(this.lastSeq, seq)
         for (const queued of this.queue.splice(0)) ws.send(queued)
         return
       }

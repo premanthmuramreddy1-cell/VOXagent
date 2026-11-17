@@ -12,6 +12,10 @@ os.environ.update(
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import Settings
+
+Settings.model_config["env_file"] = None  # the developer's own .env (keys, sign-up lock) must not reach the tests
+
 from app.main import app
 
 _n = 0

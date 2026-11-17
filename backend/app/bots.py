@@ -74,6 +74,7 @@ class BotChannel:
         self.reply, self.ask = reply, ask  # async (text) and async (question) callables
         self.answer = ""
         self.waiting: asyncio.Future[str] | None = None
+        self.lock = asyncio.Lock()  # one turn at a time per chat: turns share the answer buffer and the confirm slot
 
     async def emit(self, type: str, **payload: Any) -> None:
         if type == "answer.delta":
@@ -113,7 +114,17 @@ class BotChannel:
 async def _run(channel: BotChannel, user: User, session_id: str, text: str, pcm: bytes | None) -> None:
     from app.api.ws import run_turn  # late import: ws imports the agent stack
 
-    await run_turn(channel, user, session_id, text, pcm, [], False)  # type: ignore[arg-type]
+    async with channel.lock:
+        await run_turn(channel, user, session_id, text, pcm, [], False)  # type: ignore[arg-type]
+
+
+_turns: set[asyncio.Task] = set()  # the loop keeps only weak references: an unheld turn can be collected mid-run
+
+
+def _start(*turn: Any) -> None:
+    task = asyncio.create_task(_run(*turn))
+    _turns.add(task)
+    task.add_done_callback(_turns.discard)
 
 
 # ---------------------------------------------------------------- Telegram (long polling)
@@ -172,7 +183,7 @@ class Telegram:
                 audio = (await http.get(f"{self.files}/{info['file_path']}")).content
             pcm = await to_pcm(audio)
         if text or pcm:
-            asyncio.create_task(_run(channel, account[0], account[1], text, pcm))
+            _start(channel, account[0], account[1], text, pcm)
 
     async def poll(self) -> None:
         offset = 0
@@ -218,6 +229,31 @@ def _wa_channel(number: str) -> BotChannel:
     return _wa_channels[number]
 
 
+_wa_seen: dict[str, None] = {}  # insertion-ordered: the oldest ids are forgotten first
+
+
+def whatsapp_receive(message: dict) -> None:
+    """Handle one webhook message in the background, once. Meta retries any webhook that errors or answers slowly,
+    so the webhook must return at once and a redelivered message id must not run a second turn."""
+    ident = str(message.get("id", ""))
+    if ident:
+        if ident in _wa_seen:
+            return
+        _wa_seen[ident] = None
+        if len(_wa_seen) > 5000:
+            del _wa_seen[next(iter(_wa_seen))]
+
+    async def handle() -> None:
+        try:
+            await whatsapp_message(message)
+        except Exception:
+            log.exception("whatsapp message failed")
+
+    task = asyncio.create_task(handle())
+    _turns.add(task)
+    task.add_done_callback(_turns.discard)
+
+
 async def whatsapp_message(message: dict) -> None:
     number, kind = str(message.get("from", "")), message.get("type")
     channel = _wa_channel(number)
@@ -241,7 +277,7 @@ async def whatsapp_message(message: dict) -> None:
             audio = (await http.get(meta["url"], headers=headers)).content
         pcm = await to_pcm(audio)
     if text or pcm:
-        asyncio.create_task(_run(channel, account[0], account[1], text, pcm))
+        _start(channel, account[0], account[1], text, pcm)
 
 
 @contextlib.asynccontextmanager

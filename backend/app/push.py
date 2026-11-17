@@ -89,7 +89,12 @@ async def notify(user_id: str, title: str, body: str, url: str = "/") -> int:
         async with httpx.AsyncClient(timeout=15) as http:
             for sub in subs:
                 try:
-                    response = await http.post(sub.endpoint, content=encrypt(payload, sub.p256dh, sub.auth), headers={
+                    content = encrypt(payload, sub.p256dh, sub.auth)
+                except ValueError:  # keys no browser sent: it can never work, and raising stops every caller's loop
+                    db.delete(sub)
+                    continue
+                try:
+                    response = await http.post(sub.endpoint, content=content, headers={
                         "Authorization": vapid_header(sub.endpoint), "Content-Encoding": "aes128gcm",
                         "TTL": "86400", "Urgency": "high",
                     })

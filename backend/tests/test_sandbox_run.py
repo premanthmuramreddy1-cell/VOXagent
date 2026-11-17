@@ -69,6 +69,18 @@ def test_seatbelt_workspace_under_private_data_dir_can_resolve_its_own_path():
 
 
 @macos
+def test_seatbelt_cannot_change_the_git_folder_the_server_runs_git_on():
+    base = base_of(context())
+    config = (base / ".git" / "config").read_text()
+    asyncio.run(sandbox.run(base, "printf '[core]\\n\\tfsmonitor = touch pwned\\n' >> .git/config; "
+                                  "echo x > .git/hooks/pre-commit; echo x > .GIT/hooks/post-commit"))
+    # git itself runs outside the sandbox and obeys this folder: a hook or fsmonitor there is code on the host
+    assert (base / ".git" / "config").read_text() == config
+    assert not list((base / ".git" / "hooks").glob("*-commit"))
+    assert asyncio.run(sandbox.run(base, "git status --short && echo fine > a.txt")).ok  # reading it still works
+
+
+@macos
 def test_fix_loop_repairs_a_real_bug(monkeypatch):
     fixed = "def add(a, b):\n    return a + b\n\nprint(add(2, 3))\n"
     ctx = context(json.dumps({"explanation": "use + instead of -", "files": [{"path": "main.py", "content": fixed}]}))

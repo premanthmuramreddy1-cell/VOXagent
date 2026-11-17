@@ -11,7 +11,10 @@ globalThis.fetch = (async (url: string) => {
   return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
 }) as typeof fetch
 
-const { refresh } = await import('../src/api.ts')
+const { refresh, resumeFrom } = await import('../src/api.ts')
+assert.equal(resumeFrom(-1, 7), 7, 'first connect starts at the server position')
+assert.equal(resumeFrom(5, 9), 5, 'a reconnect keeps its place so missed events replay')
+assert.equal(resumeFrom(57, 0), 0, 'a restarted server (counter behind ours) must not have its events dropped')
 const users = await Promise.all([refresh(), refresh(), refresh()])
 assert.equal(refreshCalls, 1, 'three parallel refreshes made more than one request')
 assert.ok(users.every((u) => u?.id === 'u'))
