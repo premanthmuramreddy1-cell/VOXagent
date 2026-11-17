@@ -177,6 +177,23 @@ export default function WorkspaceView() {
   const [versions, setVersions] = useState<Version[]>([])
   const [panel, setPanel] = useState<Panel>('changes')
   const [message, setMessage] = useState('')
+  const [filter, setFilter] = useState('')
+  const unsaved = tabs.some((t) => t.content !== t.saved)
+
+  useEffect(() => {
+    if (!unsaved) return
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault() // the browser asks before unsaved edits are lost
+    addEventListener('beforeunload', warn)
+    return () => removeEventListener('beforeunload', warn)
+  }, [unsaved])
+
+  function closeTab(t: Tab) {
+    if (t.content !== t.saved && !confirm(`Close ${t.path} without saving your changes?`)) return
+    const index = tabs.findIndex((x) => x.path === t.path)
+    const rest = tabs.filter((x) => x.path !== t.path)
+    setTabs(rest)
+    if (active === t.path) setActive(rest[Math.min(index, rest.length - 1)]?.path ?? '')
+  }
   const zipInput = useRef<HTMLInputElement>(null)
 
   const say = (text: string) => setMessage(text)
@@ -259,6 +276,7 @@ export default function WorkspaceView() {
   }
 
   async function newSpace() {
+    if (unsaved && !confirm('Open a new workspace? Unsaved changes in open files will be lost.')) return
     const name = prompt('Name for the new workspace')
     if (!name) return
     try {
@@ -266,6 +284,7 @@ export default function WorkspaceView() {
       setSpaces((s) => [created, ...s])
       setWs(created.id)
       setTabs([])
+      setActive('')
     } catch (e) {
       fail(e)
     }
@@ -327,8 +346,11 @@ export default function WorkspaceView() {
             aria-label="Workspace"
             value={ws}
             onChange={(e) => {
+              if (unsaved && !confirm('Switch workspace? Unsaved changes in open files will be lost.')) return
               setWs(e.target.value)
               setTabs([])
+              setActive('')
+              setFilter('')
               post(`/workspaces/${e.target.value}/open`).catch(() => {})
             }}
           >
@@ -336,8 +358,21 @@ export default function WorkspaceView() {
           </select>
           <button className="btn-ghost min-h-8 px-2" aria-label="New workspace" onClick={newSpace}><Plus className="h-4 w-4" /></button>
         </div>
+        {files.length > 8 && (
+          <input
+            type="search"
+            className="field mx-2 mt-2 h-8 font-mono text-xs [@media(pointer:coarse)]:h-11"
+            placeholder="Filter files"
+            aria-label="Filter files"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+        )}
         <ul className="min-h-0 flex-1 overflow-y-auto py-1 font-mono text-xs" aria-label="Files">
-          {files.map((path) => (
+          {filter.trim() && !files.some((f) => f.toLowerCase().includes(filter.trim().toLowerCase())) && (
+            <li className="px-3 py-1 text-muted">No files match.</li>
+          )}
+          {files.filter((f) => f.toLowerCase().includes(filter.trim().toLowerCase())).map((path) => (
             <li key={path}>
               <button
                 className={`flex w-full items-center gap-1.5 truncate px-3 py-1 text-left hover:bg-raised [@media(pointer:coarse)]:min-h-11 ${path === active ? 'bg-raised text-ink' : 'text-muted'}`}
@@ -369,10 +404,7 @@ export default function WorkspaceView() {
               <button
                 className="pr-2 text-muted hover:text-ink"
                 aria-label={`Close ${t.path}`}
-                onClick={() => {
-                  setTabs((all) => all.filter((x) => x.path !== t.path))
-                  if (active === t.path) setActive('')
-                }}
+                onClick={() => closeTab(t)}
               >
                 <X className="h-3 w-3" />
               </button>
