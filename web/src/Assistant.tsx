@@ -8,9 +8,11 @@ type Payment = { id: string; name: string; kind: string; amount: number; currenc
 type Habit = { id: string; name: string; target: number; unit: string; times: string[]; done: number; streak: number }
 type Reminder = { id: string; text: string; due: string; repeat: string }
 
+const anchor = (title: string) => title.toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '')
+
 function Section({ icon: Icon, title, hint, children }: { icon: typeof Brain; title: string; hint: string; children: React.ReactNode }) {
   return (
-    <section className="panel p-4 sm:p-5">
+    <section id={anchor(title)} className="panel scroll-mt-48 p-4 sm:p-5">
       <header className="mb-3 flex items-baseline gap-2">
         <Icon className="h-4 w-4 shrink-0 translate-y-0.5 text-accent" />
         <h2 className="font-mono text-sm font-semibold">{title}</h2>
@@ -128,6 +130,27 @@ export default function Assistant() {
   return (
     <div className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-4 px-4 py-6 lg:grid-cols-2">
       <h1 className="sr-only">Notes, reminders and memory</h1>
+      <nav aria-label="Jump to a section" className="sticky top-14 z-20 -mx-4 flex gap-1.5 overflow-x-auto border-b border-line bg-surface px-4 py-2 lg:col-span-2">
+        {([
+          ['Today', 'Today', null], ['Bills', 'Bills & subscriptions', bills.items.length], ['Habits', 'Habits', habits.length],
+          ['Lists', 'Lists', Object.values(lists).reduce((n, items) => n + items.length, 0)],
+          ['Reminders', 'Reminders', reminders.length], ['Notes', 'Notes', notes.length],
+          ['Memory', 'What I remember', memories.length], ['Profile', 'Form-filling profile', null],
+        ] as [string, string, number | null][]).map(([label, title, count]) => (
+          <a
+            key={title}
+            href={`#${anchor(title)}`}
+            onClick={(e) => {
+              e.preventDefault() // the hash routes pages here, so scroll instead of changing it
+              document.getElementById(anchor(title))?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+            }}
+            className="inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-full border border-line px-3 font-mono text-xs text-muted hover:border-accent hover:text-ink [@media(pointer:coarse)]:min-h-11"
+          >
+            {label}
+            {count ? <span className="text-accent">{count}</span> : null}
+          </a>
+        ))}
+      </nav>
       {status && <p className="rounded-xl border border-line bg-raised px-3 py-2 font-mono text-xs text-muted lg:col-span-2" role="status">{status}</p>}
 
       <Section icon={ClipboardList} title="Today" hint="Spoken each morning as a push">
