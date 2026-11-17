@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Bell, Brain, Check, ClipboardList, NotebookPen, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
+import { AlarmClockPlus, Bell, Brain, Check, ClipboardList, NotebookPen, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
 import { api, post } from './api'
 
 type Memory = { id: string; kind: string; text: string }
@@ -32,6 +32,7 @@ export default function Assistant() {
   const [profile, setProfile] = useState<[string, string][]>([])
   const [query, setQuery] = useState('')
   const [editing, setEditing] = useState<Memory | null>(null)
+  const [draft, setDraft] = useState<{ id: string | null; text: string } | null>(null) // id null: a new note
   const [status, setStatus] = useState('')
 
   const fail = (e: unknown) => setStatus((e as Error).message)
@@ -54,6 +55,41 @@ export default function Assistant() {
       live = false
     }
   }, [load])
+
+  async function saveDraft() {
+    if (!draft?.text.trim()) return setDraft(null)
+    const body = JSON.stringify({ text: draft.text })
+    try {
+      await (draft.id ? api(`/notes/${draft.id}`, { method: 'PUT', body }) : post('/notes', { text: draft.text }))
+      setDraft(null)
+      await (query ? searchNotes(query) : load())
+    } catch (e) {
+      fail(e)
+    }
+  }
+
+  const composer = (
+    <form className="flex flex-col gap-2 py-2" onSubmit={(e) => { e.preventDefault(); saveDraft() }}>
+      <textarea
+        autoFocus
+        rows={4}
+        className="field min-h-24 resize-y py-2"
+        aria-label="Note text"
+        placeholder="Write a note. #tags are picked up."
+        value={draft?.text ?? ''}
+        onChange={(e) => setDraft((d) => d && { ...d, text: e.target.value })}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveDraft() }
+          if (e.key === 'Escape') setDraft(null)
+        }}
+      />
+      <div className="flex items-center justify-end gap-2">
+        <span className="mr-auto font-mono text-[11px] text-muted">⌘/Ctrl + Enter saves · Esc cancels</span>
+        <button type="button" className="btn-ghost min-h-8 px-3" onClick={() => setDraft(null)}>Cancel</button>
+        <button className="btn btn-accent min-h-8 px-3" disabled={!draft?.text.trim()}>Save</button>
+      </div>
+    </form>
+  )
 
   async function searchNotes(q: string) {
     setQuery(q)
@@ -116,15 +152,30 @@ export default function Assistant() {
         </form>
         <ul className="divide-y divide-line text-sm">
           {reminders.length === 0 && <li className="py-2 text-muted">Nothing scheduled.</li>}
-          {reminders.map((r) => (
+          {reminders.map((r) => {
+            const late = new Date(r.due).getTime() < Date.now()
+            return (
             <li key={r.id} className="flex items-center gap-3 py-2">
-              <time className="w-36 shrink-0 font-mono text-xs text-muted" dateTime={r.due}>
+              <time className={`w-28 shrink-0 font-mono text-xs sm:w-36 ${late ? 'font-semibold text-danger' : 'text-muted'}`} dateTime={r.due}>
+                {late && <span className="mr-1">Overdue ·</span>}
                 {new Date(r.due).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
               </time>
               <span className="min-w-0 flex-1 truncate">{r.text}{r.repeat && <span className="ml-2 label">{r.repeat}</span>}</span>
-              <button className="btn-ghost min-h-8 px-2" aria-label={`Mark ${r.text} done`} onClick={() => post(`/reminders/${r.id}/done`).then(load).catch(fail)}><Check className="h-3.5 w-3.5" /></button>
+              {!r.repeat && (
+                <button className="btn-ghost min-h-8 px-2" title="Snooze 1 hour" aria-label={`Snooze ${r.text} for 1 hour`} onClick={() => post(`/reminders/${r.id}/snooze`, { minutes: 60 }).then(load).catch(fail)}><AlarmClockPlus className="h-3.5 w-3.5" /></button>
+              )}
+              <button className="btn-ghost min-h-8 px-2" title={r.repeat ? 'Done for this time' : 'Done'} aria-label={`Mark ${r.text} done`} onClick={() => post(`/reminders/${r.id}/done`).then(load).catch(fail)}><Check className="h-3.5 w-3.5" /></button>
+              <button
+                className="btn-ghost min-h-8 px-2"
+                title={r.repeat ? 'Stop this repeating reminder' : 'Remove'}
+                aria-label={`Remove ${r.text}`}
+                onClick={() => confirm(r.repeat ? `Stop "${r.text}" for good?` : `Remove "${r.text}"?`) && api(`/reminders/${r.id}`, { method: 'DELETE' }).then(load).catch(fail)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
             </li>
-          ))}
+            )
+          })}
         </ul>
       </Section>
 
@@ -134,24 +185,26 @@ export default function Assistant() {
             <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted" />
             <input className="field pl-9" placeholder="Search notes" aria-label="Search notes" value={query} onChange={(e) => searchNotes(e.target.value)} />
           </label>
-          <button
-            className="btn"
-            onClick={async () => {
-              const text = prompt('New note')
-              if (text) await post('/notes', { text }).then(load).catch(fail)
-            }}
-          >
+          <button className="btn" onClick={() => setDraft({ id: null, text: '' })}>
             <Plus className="h-3.5 w-3.5" /> Note
           </button>
         </div>
+        {draft?.id === null && composer}
         <ul className="max-h-80 divide-y divide-line overflow-y-auto text-sm">
           {notes.length === 0 && <li className="py-2 text-muted">{query ? 'No matches.' : 'No notes yet.'}</li>}
           {notes.map((n) => (
-            <li key={n.id} className="group flex gap-3 py-2">
+            draft?.id === n.id ? <li key={n.id}>{composer}</li> : <li key={n.id} className="group flex gap-3 py-2">
               <div className="min-w-0 flex-1">
                 <p className="whitespace-pre-wrap">{n.text}</p>
-                <p className="mt-1 flex flex-wrap gap-1">{n.tags.map((t) => <span key={t} className="rounded-md bg-accent-subtle px-1.5 font-mono text-[11px] text-accent">#{t}</span>)}</p>
+                <p className="mt-1 flex flex-wrap gap-1">
+                  {n.tags.map((t) => (
+                    <button key={t} type="button" title={`Show notes about ${t}`} onClick={() => searchNotes(t)} className="rounded-md bg-accent-subtle px-1.5 font-mono text-[11px] text-accent hover:underline [@media(pointer:coarse)]:min-h-8">
+                      #{t}
+                    </button>
+                  ))}
+                </p>
               </div>
+              <button className="btn-ghost min-h-8 px-2 opacity-60 group-hover:opacity-100" aria-label="Edit note" onClick={() => setDraft({ id: n.id, text: n.text })}><Pencil className="h-3.5 w-3.5" /></button>
               <button className="btn-ghost min-h-8 px-2 opacity-60 group-hover:opacity-100" aria-label="Delete note" onClick={() => api(`/notes/${n.id}`, { method: 'DELETE' }).then(load).catch(fail)}><Trash2 className="h-3.5 w-3.5" /></button>
             </li>
           ))}

@@ -396,3 +396,47 @@ def test_bot_replies_drop_markdown_symbols():
     from app.bots import for_chat
     md = "## Fruits\n- **Apple**\n* `pear`\n\n```python\nprint(2 * 3)\n```\nSee [docs](https://x.dev)."
     assert for_chat(md) == "Fruits\n• Apple\n• pear\n\nprint(2 * 3)\nSee docs (https://x.dev)."
+
+
+def test_notes_can_be_edited_by_their_owner_only(client):
+    headers, _ = signup(client)
+    note = client.post("/notes", headers=headers, json={"text": "buy milk"}).json()
+    edited = client.put(f"/notes/{note['id']}", headers=headers, json={"text": "  buy oat milk #shopping "})
+    assert edited.status_code == 200 and edited.json()["text"] == "buy oat milk #shopping"
+    assert "shopping" in edited.json()["tags"]
+    assert client.get("/notes", headers=headers).json()[0]["text"] == "buy oat milk #shopping"
+    assert client.put(f"/notes/{note['id']}", headers=headers, json={"text": "   "}).status_code == 422
+    assert client.post("/notes", headers=headers, json={"text": "   "}).status_code == 422
+    other, _ = signup(client)
+    assert client.put(f"/notes/{note['id']}", headers=other, json={"text": "mine"}).status_code == 404
+
+
+def test_done_rolls_a_repeating_reminder_forward_and_snooze_moves_a_one_off(client):
+    headers, _ = signup(client)
+    daily = client.post("/reminders", headers=headers, json={"text": "pills", "when": "2099-01-05T09:00", "repeat": "daily"}).json()
+    once = client.post("/reminders", headers=headers, json={"text": "call", "when": "2099-01-05T10:00"}).json()
+    done = client.post(f"/reminders/{daily['id']}/done", headers=headers).json()
+    assert done["reminder"]["due"].startswith("2099-01-06T09:00")  # the series keeps going
+    assert client.post(f"/reminders/{once['id']}/done", headers=headers).json()["reminder"] is None
+    assert [r["text"] for r in client.get("/reminders", headers=headers).json()] == ["pills"]
+    later = client.post("/reminders", headers=headers, json={"text": "tea", "when": "2099-01-01T08:00"}).json()
+    snoozed = client.post(f"/reminders/{later['id']}/snooze", headers=headers, json={"minutes": 30})
+    assert snoozed.status_code == 200 and not snoozed.json()["due"].startswith("2099")
+    assert client.get("/reminders", headers=headers).json()[0]["text"] == "tea"  # now the soonest
+    assert client.post(f"/reminders/{daily['id']}/snooze", headers=headers, json={"minutes": 30}).status_code == 422
+    assert client.post(f"/reminders/{later['id']}/snooze", headers=headers, json={"minutes": 1}).status_code == 422
+    other, _ = signup(client)
+    assert client.post(f"/reminders/{later['id']}/snooze", headers=other, json={"minutes": 30}).status_code == 404
+
+
+def test_overdue_repeating_reminder_done_skips_to_the_next_future_time():
+    uid = user_id()
+    with SessionLocal() as db:
+        row = Reminder(user_id=uid, text="water", due_at=datetime(2020, 1, 1, 4, 0), repeat="weekly")
+        db.add(row)
+        db.commit()
+        rid = row.id
+    from app.api.personal import finish_reminder
+    with SessionLocal() as db:
+        finish_reminder(rid, db.get(User, uid), db)
+        assert db.get(Reminder, rid).due_at > datetime.now() and not db.get(Reminder, rid).done

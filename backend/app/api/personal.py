@@ -1,6 +1,7 @@
 """Memory, notes, reminders, settings, push subscriptions and the encrypted form-filling profile."""
 
 import re
+from datetime import timedelta
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -130,8 +131,20 @@ def list_notes(q: str = "", user: User = Depends(current_user), db: Session = De
 
 @router.post("/notes")
 def add_note(body: NoteBody, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    if not body.text.strip():
+        raise HTTPException(422, "A note needs some text.")
     row = Note(user_id=user.id, text=body.text.strip(), tags=personal.auto_tags(body.text))
     db.add(row)
+    db.commit()
+    return _note(row)
+
+
+@router.put("/notes/{note_id}")
+def edit_note(note_id: str, body: NoteBody, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
+    row = _own(db, Note, note_id, user)
+    if not body.text.strip():
+        raise HTTPException(422, "A note needs some text.")
+    row.text, row.tags = body.text.strip(), personal.auto_tags(body.text)
     db.commit()
     return _note(row)
 
@@ -179,9 +192,32 @@ def add_reminder(body: ReminderBody, user: User = Depends(current_user), db: Ses
 @router.post("/reminders/{reminder_id}/done")
 def finish_reminder(reminder_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
     row = _own(db, Reminder, reminder_id, user)
-    row.done = True
+    tz = personal.zone(db, user.id)
+    following = personal.next_due(row, tz)
+    while following and following <= now():  # done today: a repeating reminder moves to its next time, not off
+        row.due_at = following
+        following = personal.next_due(row, tz)
+    if following:
+        row.due_at = following
+    else:
+        row.done = True
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "reminder": None if row.done else _reminder(row, db)}
+
+
+class SnoozeBody(BaseModel):
+    minutes: int = Field(ge=5, le=24 * 60)
+
+
+@router.post("/reminders/{reminder_id}/snooze")
+def snooze_reminder(reminder_id: str, body: SnoozeBody, user: User = Depends(current_user),
+                    db: Session = Depends(get_db)) -> dict:
+    row = _own(db, Reminder, reminder_id, user)
+    if row.repeat:
+        raise HTTPException(422, "Repeating reminders keep their time; mark this one done instead.")
+    row.due_at, row.done = now() + timedelta(minutes=body.minutes), False
+    db.commit()
+    return _reminder(row, db)
 
 
 @router.delete("/reminders/{reminder_id}")
