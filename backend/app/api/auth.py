@@ -153,10 +153,10 @@ async def google_login(body: GoogleCredential, response: Response, db: Session =
     return _issue(user, db, response)
 
 
-@router.post("/auth/refresh")
-def refresh(response: Response, vox_refresh: str = Cookie(""), db: Session = Depends(get_db)) -> dict:
+@router.post("/auth/refresh", response_model=None)
+def refresh(response: Response, vox_refresh: str = Cookie(""), db: Session = Depends(get_db)) -> dict | Response:
     if not vox_refresh:
-        raise HTTPException(401, "session expired, log in again")
+        return Response(status_code=204)  # logged out, not an error: no failed request in the visitor's console
     row = db.get(RefreshToken, sha256(vox_refresh))
     if not row or row.expires_at < now():
         raise HTTPException(401, "session expired, log in again")

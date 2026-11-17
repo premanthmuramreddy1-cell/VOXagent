@@ -461,3 +461,18 @@ def test_a_reply_cut_off_at_the_output_limit_is_written_again_by_the_next_model(
     short, full = Model("short", "<html><body>half", True), Model("full", "<html>whole</html>", False)
     text = asyncio.run(Agent([short, full], {}).complete("u1", [{"role": "user", "content": "write a page"}]))
     assert text == "<html>whole</html>" and short.calls == 1 and full.calls == 1
+
+
+def test_attached_file_is_named_to_the_model_and_explain_is_offered():
+    # the model once guessed "add.py" for an attached calc.py and called read_file, which only sees the workspace
+    from app.db import Upload, User
+    with SessionLocal() as db:
+        db.add(User(id="u1", email="u1@example.com", password_hash="x"))
+        db.add(Upload(id="up1", user_id="u1", filename="calc.py", size=10))
+        db.commit()
+    llm = FakeLLM(plan(), "It adds two numbers.")
+    run(Agent([llm], {"explain": EchoSkill("explain")}), Recorder(), text="what does it return?", upload_ids=["up1"])
+    planner_said, model_said = llm.calls[0]["messages"][-1]["content"], llm.calls[1]["messages"][-1]["content"]
+    for said in (planner_said, model_said):
+        assert "calc.py" in said and "explain" in said
+    assert "explain" in [t["function"]["name"] if "function" in t else t["name"] for t in llm.calls[1]["tools"]]

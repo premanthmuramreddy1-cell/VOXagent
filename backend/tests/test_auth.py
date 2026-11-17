@@ -46,6 +46,14 @@ def test_refresh_token_rotates_and_logout_revokes(client):
     assert client.post("/auth/refresh").status_code == 401
 
 
+def test_refresh_without_cookie_is_no_content(client):
+    # a logged-out visitor has no session; that is not an error, so the browser logs no failed request
+    response = client.post("/auth/refresh")
+    assert response.status_code == 204
+    assert response.content == b""
+    assert "vox_refresh" not in response.cookies
+
+
 def test_admin_flag_comes_from_config(client):
     assert signup(client, "admin@example.com")[1]["user"]["is_admin"] is True
     assert signup(client)[1]["user"]["is_admin"] is False

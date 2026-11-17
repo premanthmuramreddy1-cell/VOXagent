@@ -18,7 +18,7 @@ export function refresh(): Promise<User | null> {
   refreshing ??= (async () => {
     try {
       const response = await fetch('/auth/refresh', { method: 'POST' })
-      if (!response.ok) return null
+      if (response.status !== 200) return null // 204: no session cookie, the visitor is logged out
       const body = await response.json()
       token = body.access_token
       return body.user as User

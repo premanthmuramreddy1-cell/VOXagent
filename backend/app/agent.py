@@ -12,7 +12,9 @@ from pydantic import ValidationError
 
 from app import forms
 from app.config import settings
-from app.db import Activity, SessionLocal, record, record_error
+from sqlalchemy import select
+
+from app.db import Activity, SessionLocal, Upload, record, record_error
 from app.providers import LLM, ToolCall, llm_stream, log
 from app.skills import Permission, RunContext, Skill, as_tool, is_owner
 
@@ -167,6 +169,16 @@ class Turn:
     context: str = ""  # memory, project notes and local time, read at the start of every turn
 
 
+def _attached(turn: Turn) -> str:
+    """Name this turn's attachments for the model: unnamed, it guessed a filename and reached for read_file."""
+    if not turn.upload_ids:
+        return ""
+    with SessionLocal() as db:  # the user's own uploads only
+        names = db.scalars(select(Upload.filename).where(Upload.id.in_(turn.upload_ids), Upload.user_id == turn.user_id))
+        listed = ", ".join(name[:80] for name in list(names)[:5]) or f"{len(turn.upload_ids)} file(s)"
+    return f"\n[Attached: {listed}. Read attached files with the explain or code_review tool; read_file only sees the workspace.]"
+
+
 def log_activity(turn: Turn, action: str, reason: str, permission: str = "read", outcome: str = "ok") -> None:
     with SessionLocal() as db:
         db.add(Activity(
@@ -194,7 +206,7 @@ class Agent:
 
     async def plan(self, turn: Turn) -> dict[str, Any]:
         listing = "\n".join(f"- {s.name}: {s.description}" for s in self.skills.values())
-        attached = f"\n[{len(turn.upload_ids)} file(s) attached]" if turn.upload_ids else ""
+        attached = _attached(turn)
         local = f"\n{turn.context.splitlines()[0]}" if turn.context else ""  # the planner needs today's date
         recent = [{"role": m["role"], "content": str(m.get("content", ""))[:400]}
                   for m in turn.history[-6:] if m.get("role") in ("user", "assistant") and m.get("content")]
@@ -261,6 +273,9 @@ class Agent:
         if shortlisted and not pages and URL_RE.search(turn.text) and "web_fetch" in self.skills:
             todo.add("web_fetch")  # the link was left to an offered tool, which may be the wrong one: keep it readable
         said = f"{turn.text}\n(Read as, with spelling fixed: {plan['understood']})" if plan["understood"] else turn.text
+        said += _attached(turn)
+        if turn.upload_ids and "explain" in self.skills:
+            todo.add("explain")  # read_file only sees the workspace; attachments are read through explain
         messages = [{"role": "system", "content": system}, *turn.history, {"role": "user", "content": said}]
         if shortlisted and todo:  # models answered "which device?" or "I cannot browse" with the right tool in hand
             messages[0]["content"] += (

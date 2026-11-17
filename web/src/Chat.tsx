@@ -427,7 +427,7 @@ function Bubble({ item }: { item: Item }) {
 
         {/* Text Answer */}
         {(item.text || item.live) && (
-          <div className="relative rounded-2xl rounded-tl-xs border border-line/50 bg-raised px-4 py-3">
+          <div className="relative rounded-2xl rounded-tl-xs border border-line/50 bg-raised py-3 pl-4 pr-12">
             <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-ink">
               {item.text}
               {item.live && (
@@ -438,7 +438,7 @@ function Bubble({ item }: { item: Item }) {
             {item.text && !item.live && (
               <button
                 onClick={copyText}
-                className="absolute right-2 top-2 rounded-md p-1.5 text-muted opacity-0 transition-opacity hover:bg-surface hover:text-ink group-hover:opacity-100"
+                className="absolute right-0.5 top-0.5 flex h-9 w-9 items-center justify-center rounded-md text-muted opacity-0 transition-opacity hover:bg-surface hover:text-ink group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11"
                 title="Copy response"
                 aria-label="Copy response"
               >
@@ -680,6 +680,7 @@ export default function Chat() {
     <div className="flex h-full w-full overflow-hidden">
       {/* Left Sidebar for Sessions */}
       <aside
+        inert={!sidebarOpen}
         className={`no-print shrink-0 border-r border-line bg-surface glass flex flex-col transition-all duration-200 ease-in-out ${
           sidebarOpen ? 'w-64' : 'w-0'
         } overflow-hidden`}
@@ -1009,7 +1010,7 @@ export default function Chat() {
                 <button
                   type="button"
                   onClick={toggleHandsFree}
-                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-xs transition-colors ${
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-xs transition-colors [@media(pointer:coarse)]:min-h-11 ${
                     handsFree
                       ? 'border border-accent/40 bg-accent-subtle font-semibold text-accent'
                       : 'text-muted hover:text-ink'
@@ -1026,7 +1027,7 @@ export default function Chat() {
                     setSpeak(!speak)
                     if (speak) player.current.stop()
                   }}
-                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-xs transition-colors ${
+                  className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 font-mono text-xs transition-colors [@media(pointer:coarse)]:min-h-11 ${
                     speak ? 'text-ink font-semibold' : 'text-muted line-through'
                   }`}
                 >
