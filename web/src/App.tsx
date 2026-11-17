@@ -587,7 +587,7 @@ export default function App() {
                   aria-current={active ? 'page' : undefined}
                   aria-label={name}
                   title={name}
-                  className={`flex h-9 min-w-9 shrink-0 items-center justify-center gap-1.5 rounded-xl px-2.5 font-mono text-xs font-semibold transition-all md:px-3 ${
+                  className={`flex h-9 min-w-9 shrink-0 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:min-w-11 items-center justify-center gap-1.5 rounded-xl px-2.5 font-mono text-xs font-semibold transition-all md:px-3 ${
                     active
                       ? 'border border-line bg-raised text-ink shadow-xs'
                       : 'text-muted hover:bg-raised/60 hover:text-ink'
@@ -610,7 +610,7 @@ export default function App() {
 
           {/* Theme switcher */}
           <button
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-line bg-raised text-muted transition-colors hover:text-ink"
+            className="flex h-9 w-9 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11 items-center justify-center rounded-xl border border-line bg-raised text-muted transition-colors hover:text-ink"
             onClick={() => setDark(!dark)}
             aria-label="Toggle color theme"
           >

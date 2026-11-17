@@ -406,7 +406,7 @@ export default function WorkspaceView() {
               key={key}
               role="tab"
               aria-selected={panel === key}
-              className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 font-mono text-xs ${panel === key ? 'border-b-2 border-accent text-ink' : 'text-muted'}`}
+              className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 font-mono text-xs [@media(pointer:coarse)]:min-h-11 ${panel === key ? 'border-b-2 border-accent text-ink' : 'text-muted'}`}
               onClick={() => setPanel(key)}
             >
               <Icon className="h-3.5 w-3.5" /> {label}

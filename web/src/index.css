@@ -109,6 +109,12 @@ body {
   background: var(--muted);
 }
 
+@media (pointer: coarse) {
+  /* touch: 44px targets; unlayered so it wins over per-button utilities like min-h-8 */
+  .btn, .btn-ghost { min-height: 2.75rem; min-width: 2.75rem; }
+  .field { min-height: 2.75rem; }
+}
+
 @layer components {
   .label {
     @apply font-mono text-[11px] font-semibold uppercase tracking-wider text-muted;

@@ -473,7 +473,7 @@ export default function Reviews({ id }: { id?: string }) {
               <button
                 type="button"
                 onClick={() => setInputTab('code')}
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-lg font-mono text-xs font-semibold transition-all ${
+                className={`flex h-9 [@media(pointer:coarse)]:h-11 flex-1 items-center justify-center gap-2 rounded-lg font-mono text-xs font-semibold transition-all ${
                   inputTab === 'code' ? 'bg-raised text-ink shadow-xs' : 'text-muted hover:text-ink'
                 }`}
               >
@@ -482,7 +482,7 @@ export default function Reviews({ id }: { id?: string }) {
               <button
                 type="button"
                 onClick={() => setInputTab('file')}
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-lg font-mono text-xs font-semibold transition-all ${
+                className={`flex h-9 [@media(pointer:coarse)]:h-11 flex-1 items-center justify-center gap-2 rounded-lg font-mono text-xs font-semibold transition-all ${
                   inputTab === 'file' ? 'bg-raised text-ink shadow-xs' : 'text-muted hover:text-ink'
                 }`}
               >
@@ -491,7 +491,7 @@ export default function Reviews({ id }: { id?: string }) {
               <button
                 type="button"
                 onClick={() => setInputTab('git')}
-                className={`flex h-9 flex-1 items-center justify-center gap-2 rounded-lg font-mono text-xs font-semibold transition-all ${
+                className={`flex h-9 [@media(pointer:coarse)]:h-11 flex-1 items-center justify-center gap-2 rounded-lg font-mono text-xs font-semibold transition-all ${
                   inputTab === 'git' ? 'bg-raised text-ink shadow-xs' : 'text-muted hover:text-ink'
                 }`}
               >

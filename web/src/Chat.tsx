@@ -957,7 +957,7 @@ export default function Chat() {
                     <button
                       type="submit"
                       disabled={!text.trim() && !attached}
-                      className="flex h-9 w-9 items-center justify-center rounded-lg bg-accent text-on-accent transition-opacity disabled:opacity-30"
+                      className="flex h-9 w-9 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:w-11 items-center justify-center rounded-lg bg-accent text-on-accent transition-opacity disabled:opacity-30"
                       title="Send message"
                     >
                       <Send className="h-4 w-4" />
