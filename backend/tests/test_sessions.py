@@ -49,10 +49,10 @@ def test_deleting_a_bot_linked_session_gives_the_bot_a_fresh_one(client):
     headers, body = signup(client)
     sid = new_session(client, headers)
     with SessionLocal() as db:
-        db.add(BotLink(user_id=body["user"]["id"], platform="telegram", external_id="42", session_id=sid))
+        db.add(BotLink(user_id=body["user"]["id"], platform="telegram", external_id=f"qa-{sid}", session_id=sid))
         db.commit()
     assert client.delete(f"/sessions/{sid}", headers=headers).status_code == 204
     with SessionLocal() as db:
-        link = db.scalars(select(BotLink).where(BotLink.external_id == "42")).one()
+        link = db.scalars(select(BotLink).where(BotLink.external_id == f"qa-{sid}")).one()
         assert link.session_id and link.session_id != sid
     assert [s["title"] for s in client.get("/sessions", headers=headers).json()] == ["Telegram chat"]
