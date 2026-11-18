@@ -201,3 +201,10 @@ def test_learn_drops_fragments_that_are_not_a_preference():
     uid = user()
     complete, _ = scripted(json.dumps({"preferences": ["Captain", "wants to be called Captain"]}))
     assert asyncio.run(brain.learn(complete, uid, "Call me Captain from now on")) == ["wants to be called Captain"]
+
+
+def test_learn_keeps_the_users_own_words_when_the_model_returns_only_fragments():
+    uid = user()
+    complete, _ = scripted(json.dumps({"preferences": ["concise", "brief"]}))
+    saved = asyncio.run(brain.learn(complete, uid, "Keep your answers under 25 words from now on."))
+    assert saved == ['in their words: "Keep your answers under 25 words from now on."']

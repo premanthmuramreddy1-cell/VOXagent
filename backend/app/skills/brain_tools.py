@@ -135,7 +135,9 @@ class Recall:
         if len(hits) < 2:  # words did not match: let the model read recent history and pick by meaning
             hits += [h for h in await _by_meaning(ctx, args.query) if h not in hits]
         if not hits:
-            return SkillResult(f"I found nothing about {args.query!r} in your past chats, notes or files.", {"hits": []})
+            return SkillResult(f"Nothing about {args.query!r} in the user's past chats, notes or files. If the question "
+                               "is general, answer it normally; if it is about their own life, say you have no record "
+                               "and ask them.", {"hits": []})
         listing = "\n".join(f"- [{h['source']}{', ' + h['date'] if h['date'] else ''}] {h['text']}" for h in hits)
         return SkillResult(f"From the user's history (answer from these, say where each came from):\n{listing}",
                            {"hits": hits})

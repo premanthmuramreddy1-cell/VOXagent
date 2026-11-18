@@ -626,3 +626,42 @@ def test_an_offered_news_tool_does_not_replace_the_search_for_a_fact():
         text="What is the population of India?")
     assert search.queries and briefing.queries == []
     assert all(t["function"]["name"] != "world_briefing" for t in llm.calls[1]["tools"] or [])
+
+
+def _recall_skill():
+    class FakeRecall:
+        name, input_schema, permission = "recall", web_tools.SearchArgs, Permission.READ
+        description = "Search history."
+
+        def __init__(self):
+            self.queries = []
+
+        async def run(self, args, ctx):
+            self.queries.append(args.query)
+            return SkillResult("[chat] Priya's wedding is on 14 February", {"hits": []})
+
+    return FakeRecall()
+
+
+def test_an_unclear_question_without_a_cue_looks_in_the_history_before_asking():
+    recall = _recall_skill()
+    unclear = {**plan(), "unclear": True, "question": "Whose function?"}
+    llm = FakeLLM(unclear, call("recall", query="family function"), "Priya's wedding, on 14 February.")
+    rec = Recorder()
+    answer, _ = run(Agent([llm], {"recall": recall}), rec, text="whose family function is coming up?")
+    assert recall.queries and "Priya" in answer and not any(t == "clarify" for t, _ in rec.events)
+
+
+def test_a_personal_question_checks_the_history_before_the_web():
+    recall, search = _recall_skill(), FakeSearch()
+    llm = FakeLLM({**plan(), "factual": True}, call("recall", query="passport"), "Renew it in January.")
+    answer, _ = run(Agent([llm], {"recall": recall, "web_search": search}), Recorder(),
+                    text="When do I need to renew my passport?")
+    assert recall.queries and search.queries == [] and answer == "Renew it in January."
+
+
+def test_a_plain_unclear_command_still_asks():
+    recall = _recall_skill()
+    rec = Recorder()
+    run(Agent([FakeLLM({**plan(), "unclear": True, "question": "Book what?"})], {"recall": recall}), rec, text="book it")
+    assert recall.queries == [] and any(t == "clarify" for t, _ in rec.events)

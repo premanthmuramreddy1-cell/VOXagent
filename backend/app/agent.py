@@ -263,10 +263,14 @@ class Agent:
     async def run(self, turn: Turn) -> tuple[str, dict[str, Any]]:
         """Handle one user turn. Returns the answer text and the plan."""
         plan = await self.plan(turn)
-        if "recall" in self.skills and RECALL_CUE.search(turn.text) and (plan["unclear"] or not plan["steps"]):
-            # "that thing I told you about" is in the user's history: look it up instead of asking them to repeat it
+        asked = turn.text.rstrip().endswith("?") or bool(FACT_QUESTION.search(turn.text))
+        steps = {s["skill"] for s in plan["steps"]}
+        if "recall" in self.skills and "recall" not in steps and (
+                RECALL_CUE.search(turn.text) and (plan["unclear"] or not steps)
+                or asked and plan["unclear"]  # "that appointment with the tooth doctor?": theirs, look before asking
+                or asked and PERSONAL.search(turn.text) and steps <= {"web_search"}):  # "when do I renew my passport?"
             plan = {**plan, "unclear": False, "steps": [{"text": "Look through what you told me", "skill": "recall",
-                                                         "done": False}]}
+                                                         "done": False}, *plan["steps"]]}
         if plan["unclear"] and plan["question"] and not FORM_LINK_RE.search(turn.text):  # a form link is the request
             await turn.emit("clarify", question=plan["question"], language=plan["language"])
             return plan["question"], plan
@@ -304,7 +308,7 @@ class Agent:
         factual = (plan["factual"] or (not plan["steps"] and bool(FACT_QUESTION.search(turn.text))
                                        and not PERSONAL.search(turn.text))) and not SMALL_TALK.search(turn.text)
         planned = {s["skill"] for s in plan["steps"]}  # an offered (shortlisted) tool is not a plan to fetch sources
-        if factual and not pages and not link and "web_search" in self.skills and not planned & SOURCED:
+        if factual and not pages and not link and "web_search" in self.skills and not planned & (SOURCED | {"recall"}):
             # facts come from a source the user can open, not from the model's memory alone
             found, *_ = await self._run_skill(ToolCall("web_search", {"query": plan["understood"] or turn.text}),
                                               turn, plan)

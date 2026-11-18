@@ -65,8 +65,11 @@ async def learn(complete: Complete, user_id: str, text: str) -> list[str]:
         return []
     saved = []
     with SessionLocal() as db:
-        for line in (str(p).strip()[:200] for p in found[:5]):
-            if len(line.split()) < 2 or SECRET.search(line):  # a bare "Captain" is not a usable preference
+        lines = [line for line in (str(p).strip()[:200] for p in found[:5]) if len(line.split()) >= 2]  # a bare "Captain" is not usable
+        if found and not lines:  # only fragments ("concise", "dosa"): their own words are the faithful record
+            lines = [f'in their words: "{" ".join(text.split())[:200]}"']
+        for line in lines:
+            if SECRET.search(line):
                 continue
             seen = db.scalar(select(Memory).where(Memory.user_id == user_id,
                                                   func.lower(Memory.text) == line.lower()))
