@@ -4,9 +4,59 @@ const END_OF_SPEECH_MS = 900
 const MAX_MS = 30_000
 const CHUNK_MS = 100
 
+/** Loudness and brightness (both 0..1) of whoever is talking now: you into the mic, or the assistant's voice. */
+export const voice = { level: 0, pitch: 0 }
+const meters: AnalyserNode[] = []
+let wave = new Float32Array(512)
+let bins = new Uint8Array(256)
+
+function meter(ctx: AudioContext): AnalyserNode {
+  const analyser = ctx.createAnalyser()
+  analyser.fftSize = 512
+  analyser.smoothingTimeConstant = 0.6
+  meters.push(analyser)
+  return analyser
+}
+
+/** Read once per animation frame by the swarm; allocates nothing. */
+export function sampleVoice(): typeof voice {
+  let level = 0
+  let pitch = voice.pitch
+  for (const analyser of meters) {
+    if (analyser.context.state !== 'running') continue
+    if (wave.length !== analyser.fftSize) wave = new Float32Array(analyser.fftSize)
+    if (bins.length !== analyser.frequencyBinCount) bins = new Uint8Array(analyser.frequencyBinCount)
+    analyser.getFloatTimeDomainData(wave)
+    let sum = 0
+    for (let i = 0; i < wave.length; i++) sum += wave[i] * wave[i]
+    const rms = Math.sqrt(sum / wave.length)
+    if (rms <= level) continue
+    level = rms
+    analyser.getByteFrequencyData(bins)
+    let total = 0
+    let weighted = 0
+    for (let i = 0; i < bins.length; i++) {
+      total += bins[i]
+      weighted += bins[i] * i
+    }
+    // spectral centroid: speech sits at about 300-3000 Hz
+    const hz = total ? ((weighted / total) * analyser.context.sampleRate) / analyser.fftSize : 0
+    pitch = Math.min(1, Math.max(0, (hz - 300) / 2700))
+  }
+  voice.level = Math.min(1, level * 6)
+  voice.pitch = pitch
+  return voice
+}
+
+function unmeter(analyser?: AnalyserNode) {
+  const at = analyser ? meters.indexOf(analyser) : -1
+  if (at >= 0) meters.splice(at, 1)
+}
+
 /** Plays WAV clips from the server one after another. stop() is the barge-in cut. */
 export class Player {
   private ctx?: AudioContext
+  private out?: AnalyserNode
   private queue: ArrayBuffer[] = []
   private current?: AudioBufferSourceNode
   private busy = false
@@ -30,11 +80,15 @@ export class Player {
     this.busy = true
     this.onChange(true)
     this.ctx ??= new AudioContext()
+    if (!this.out) {
+      this.out = meter(this.ctx) // the swarm moves with the assistant's own voice
+      this.out.connect(this.ctx.destination)
+    }
     try {
       await this.ctx.resume()
       const source = this.ctx.createBufferSource()
       source.buffer = await this.ctx.decodeAudioData(wav)
-      source.connect(this.ctx.destination)
+      source.connect(this.out)
       source.onended = () => {
         if (this.current === source) this.next()
       }
@@ -74,6 +128,7 @@ export class Mic {
     this.handsFree = on
   }
   private ctx?: AudioContext
+  private level?: AnalyserNode
   private stream?: MediaStream
   private preRoll: ArrayBuffer[] = []
   private loud = 0
@@ -94,7 +149,9 @@ export class Mic {
     this.ctx = new AudioContext()
     await this.ctx.audioWorklet.addModule('/pcm-worklet.js')
     const node = new AudioWorkletNode(this.ctx, 'pcm')
-    this.ctx.createMediaStreamSource(this.stream).connect(node)
+    const source = this.ctx.createMediaStreamSource(this.stream)
+    source.connect(node)
+    source.connect((this.level = meter(this.ctx))) // the swarm breathes with the user's voice
     node.port.onmessage = (event) => this.onData(event.data.pcm, event.data.rms)
   }
 
@@ -134,6 +191,8 @@ export class Mic {
 
   close() {
     this.stream?.getTracks().forEach((track) => track.stop())
+    unmeter(this.level)
+    this.level = undefined
     this.ctx?.close()
     this.ctx = undefined
     this.recording = false

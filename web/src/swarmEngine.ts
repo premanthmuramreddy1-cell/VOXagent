@@ -8,6 +8,7 @@
  * Shapes (objects, imported models, text; see shapes.ts) live in two float textures, so the swarm can morph from a
  * formation or one shape into the next. A steady shape (text) stops turning and faces the viewer to stay readable.
  */
+import { sampleVoice } from './audio'
 import { SHAPE_N, SHAPE_SIDE } from './shapes'
 
 export type Mood = 'idle' | 'listen' | 'think' | 'speak'
@@ -24,6 +25,7 @@ precision highp float;
 uniform float uTime, uCount, uAssemble, uMorph, uFromForm, uToForm, uDpr, uLight, uAspect, uSteady, uShift;
 uniform highp sampler2D uShapeA, uShapeB;  // SHAPE_SIDE x SHAPE_SIDE points, xyz in rgb
 uniform vec4 uMood;       // idle, listen, think, speak weights
+uniform float uLevel, uPitch;  // live voice: loudness and brightness, 0..1 (audio.ts sampleVoice)
 uniform vec2 uPointer;    // -1..1
 out vec3 vColor;
 out float vAlpha;
@@ -87,8 +89,10 @@ void main() {
   float swirl = time * (0.08 + uMood.z * 0.9) * (1.3 - length(p)) * calm;   // think: swirl, faster near the core
   p.xz = mat2(cos(swirl), -sin(swirl), sin(swirl), cos(swirl)) * p.xz;
   float bend = 1.0 - 0.85 * uSteady;
-  p *= 1.0 + uMood.y * 0.08 * bend * sin(time * 5.0 + p.y * 9.0);           // listen: the cloud breathes
-  p *= 1.0 + uMood.w * 0.12 * bend * sin(length(p) * 22.0 - time * 9.0);     // speak: waves run outward
+  float voiced = uMood.y + uMood.w;                                           // only a voice turn reacts to sound
+  p *= 1.0 + uMood.y * bend * (0.05 * sin(time * 5.0 + p.y * 9.0) + 0.14 * uLevel);   // listen: breathes with you
+  p *= 1.0 + uMood.w * bend * (0.04 + 0.16 * uLevel) * sin(length(p) * 22.0 - time * 9.0);  // speak: its syllables
+  p *= 1.0 - uMood.z * 0.1 * bend;                                            // think: draws into a tight core
   p += 0.006 * vec3(sin(time * 1.7 + s1 * 40.0), cos(time * 1.3 + s2 * 40.0), sin(time * 1.1 + s3 * 40.0));
   if (dust) p += vec3(sin(time * 0.05 + s2 * 6.0), cos(time * 0.04 + s1 * 6.0), 0.0) * 0.3;
 
@@ -111,7 +115,8 @@ void main() {
   vec3 violet = uLight > 0.5 ? vec3(0.30, 0.14, 0.55) : vec3(0.62, 0.42, 1.0);
   vec3 spark = uLight > 0.5 ? vec3(0.55, 0.30, 0.02) : vec3(1.0, 0.78, 0.42);
   vColor = mix(mix(cyan, violet, clamp(p.y * 0.9 + s1 * 0.5, 0.0, 1.0)), spark, step(0.996 - energy * 0.01, s2));
-  vAlpha = (dust ? 0.22 : 0.32 + energy * 0.25) * smoothstep(5.0, 1.5, z) * (uLight > 0.5 ? 1.4 : 1.0);
+  vColor = mix(vColor, cyan, uPitch * voiced * 0.55);                       // a brighter voice cools the colour
+  vAlpha = (dust ? 0.22 : 0.32 + energy * 0.25 + uLevel * voiced * 0.2) * smoothstep(5.0, 1.5, z) * (uLight > 0.5 ? 1.4 : 1.0);
 }`
 
 const FRAGMENT = `#version 300 es
@@ -127,7 +132,7 @@ void main() {
 
 const MOODS: Record<Mood, number> = { idle: 0, listen: 1, think: 2, speak: 3 }
 const UNIFORMS = ['uTime', 'uCount', 'uAssemble', 'uMorph', 'uFromForm', 'uToForm', 'uDpr', 'uLight', 'uAspect', 'uMood', 'uPointer',
-  'uSteady', 'uShapeA', 'uShapeB', 'uShift'] as const
+  'uSteady', 'uShapeA', 'uShapeB', 'uShift', 'uLevel', 'uPitch'] as const
 const MORPH_MS = 1700
 const SHAPE_A = 4
 const SHAPE_B = 5
@@ -168,6 +173,8 @@ export class Swarm {
   private staging = new Float32Array(SHAPE_N * 4)
   private slow = 0
   private last = 0
+  private level = 0 // eased voice loudness and brightness, 0..1
+  private pitch = 0
   count: number
   light = false
   reducedMotion = false
@@ -263,6 +270,10 @@ export class Swarm {
     const ease = 1 - Math.exp(-dt * 3)
     for (let i = 0; i < 4; i++) this.mood[i] += (this.target[i] - this.mood[i]) * ease
     for (let i = 0; i < 2; i++) this.pointer[i] += (this.pointerTarget[i] - this.pointer[i]) * ease
+    const heard = this.reducedMotion ? { level: 0, pitch: 0 } : sampleVoice()
+    const quick = 1 - Math.exp(-dt * 14) // syllables are fast: a slow ease would smear them
+    this.level += (heard.level - this.level) * quick
+    this.pitch += (heard.pitch - this.pitch) * ease
     this.morph = Math.min(1, (now - this.morphStart) / MORPH_MS)
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
@@ -295,6 +306,8 @@ export class Swarm {
     const m = this.morph * this.morph * (3 - 2 * this.morph)
     gl.uniform1f(u.uSteady, this.steady[this.from] * (1 - m) + this.steady[this.to] * m)
     gl.uniform1f(u.uShift, this.shift)
+    gl.uniform1f(u.uLevel, this.level)
+    gl.uniform1f(u.uPitch, this.pitch)
     for (let i = 0; i < 2; i++) {
       gl.activeTexture(gl.TEXTURE0 + i)
       gl.bindTexture(gl.TEXTURE_2D, this.textures[i])

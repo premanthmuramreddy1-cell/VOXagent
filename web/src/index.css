@@ -187,6 +187,71 @@ body {
   .chat-rail { transition: none; }
 }
 
+/* Thought trail: the agent's real tool steps as linked nodes; a light travels the link into the running step. */
+.thought-trail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+.thought-node {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.625rem;
+  border: 1px solid color-mix(in oklab, var(--ok) 30%, transparent);
+  border-radius: 0.5rem;
+  background: var(--ok-subtle);
+  color: var(--ok);
+  transition: background-color 250ms ease-out, border-color 250ms ease-out, color 250ms ease-out;
+}
+.thought-node + .thought-node { margin-left: 1.5rem; }
+.thought-node + .thought-node::before {           /* the link from the previous step */
+  content: "";
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  width: 1.5rem;
+  height: 1px;
+  background: color-mix(in oklab, var(--accent) 45%, transparent);
+}
+.thought-node[data-state="running"] {
+  border-color: color-mix(in oklab, var(--accent) 45%, transparent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+.thought-node[data-state="running"]::after {      /* a spark crossing the link into the step now running */
+  content: "";
+  position: absolute;
+  right: calc(100% + 1.2rem);
+  top: calc(50% - 2px);
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: thought-spark 900ms ease-in infinite;
+}
+.thought-node:first-child[data-state="running"]::after { display: none; }
+.thought-node[data-state="failed"] {
+  border-color: color-mix(in oklab, var(--danger) 35%, transparent);
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+.thought-dot { display: inline-flex; }
+@keyframes thought-spark {
+  from { transform: translateX(0); opacity: 0; }
+  30% { opacity: 1; }
+  to { transform: translateX(1.1rem); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thought-node { transition: none; }
+  .thought-node[data-state="running"]::after { animation: none; opacity: 1; transform: translateX(0.55rem); }
+}
+
 /* The swarm sits under everything; a vignette keeps text over its centre readable. */
 .swarm-backdrop::after {
   content: "";

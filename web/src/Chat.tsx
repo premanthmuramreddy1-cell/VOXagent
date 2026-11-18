@@ -4,6 +4,7 @@ import { api, download, post, Socket, upload } from './api'
 import { parse, type Inline } from './markdown'
 import { Mic, Player } from './audio'
 import { setSwarmMood } from './swarmEngine'
+import ThoughtTrail from './ThoughtTrail'
 import { BuildCard, NewsDeck } from './BotDeck'
 import { buildCredit, importModel, isModel, playBuild, playNews, releaseBots, type Briefing, type Build } from './botShow'
 import {
@@ -16,8 +17,6 @@ import {
   Square,
   Plus,
   CheckCircle2,
-  XCircle,
-  Loader2,
   Terminal,
   Copy,
   Check,
@@ -423,41 +422,7 @@ function Bubble({ item }: { item: Item }) {
         {/* Tool Invocations */}
         {item.tools && item.tools.length > 0 && (
           <div className="flex flex-col gap-2.5">
-            <div className="flex flex-wrap gap-2">
-              {item.tools.map((tool, index) => {
-                const isRunning = tool.state === 'running'
-                const isOk = tool.state === 'ok'
-                const isFailed = tool.state === 'failed'
-
-                return (
-                  <div
-                    key={index}
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 font-mono text-xs shadow-xs ${
-                      isRunning
-                        ? 'border-accent/40 bg-accent-subtle text-accent'
-                        : isOk
-                        ? 'border-ok/30 bg-ok-subtle text-ok'
-                        : 'border-danger/30 bg-danger-subtle text-danger'
-                    }`}
-                  >
-                    {isRunning && <Loader2 className="h-3 w-3 animate-spin" />}
-                    {isOk && <CheckCircle2 className="h-3 w-3" />}
-                    {isFailed && <XCircle className="h-3 w-3" />}
-                    <span className="font-semibold">{tool.skill}</span>
-                    {tool.error && <span className="text-danger">— {tool.error}</span>}
-                    {tool.data?.review_id && (
-                      <a
-                        className="ml-1 inline-flex items-center gap-1 font-semibold underline hover:opacity-80"
-                        href={`#/reviews/${tool.data.review_id}`}
-                      >
-                        Report ({tool.data.score}/100)
-                        <ExternalLink className="h-2.5 w-2.5" />
-                      </a>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
+            <ThoughtTrail tools={item.tools} />
 
             {/* Thinking / Reasoning Breakdown */}
             {item.tools?.some((t) => t.data?.thinking?.length > 0) && (
