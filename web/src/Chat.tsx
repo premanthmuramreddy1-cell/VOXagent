@@ -5,6 +5,7 @@ import { parse, type Inline } from './markdown'
 import { Mic, Player } from './audio'
 import { setSwarmMood } from './swarmEngine'
 import ThoughtTrail from './ThoughtTrail'
+import Sources from './Sources'
 import { BuildCard, NewsDeck } from './BotDeck'
 import { buildCredit, importModel, isModel, playBuild, playNews, releaseBots, type Briefing, type Build } from './botShow'
 import {
@@ -423,6 +424,7 @@ function Bubble({ item }: { item: Item }) {
         {item.tools && item.tools.length > 0 && (
           <div className="flex flex-col gap-2.5">
             <ThoughtTrail tools={item.tools} />
+            <Sources tools={item.tools} />
 
             {/* Thinking / Reasoning Breakdown */}
             {item.tools?.some((t) => t.data?.thinking?.length > 0) && (

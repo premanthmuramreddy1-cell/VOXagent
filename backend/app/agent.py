@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from app import forms
+from app import brain, forms
 from app.config import settings
 from sqlalchemy import select
 
@@ -32,6 +32,7 @@ HINGLISH = {"hai", "hain", "mujhe", "mera", "meri", "kya", "kar", "karo", "nahi"
             "namaste", "bolo", "bol", "bata", "dikha", "bana", "karna", "acha", "accha", "theek", "haan", "ji", "yaar",
             "kuch", "kaun", "kahan", "kitna", "kitne", "kaisa", "mujhko", "humko", "apna", "apni", "bhai", "dost"}
 SUBMIT_RE = re.compile(r"\b(submit|send)\b", re.IGNORECASE)
+SOURCED = {"web_search", "web_fetch", "deep_research", "agent_team", "world_briefing"}  # bring their own sources
 CODE_SKILLS = {"code_review", "ask_project", "generate_code", "fix_and_run", "create_project"}  # use VOX_LLM_CODE
 DECLINED = "The user declined this action, so it was not done."
 READ_OUT = "This result was already read out to the user word for word. Do not repeat it or add to it."
@@ -48,6 +49,7 @@ PLAN_SCHEMA = {
         "understood": {"type": "string"},
         "language": {"type": "string"},
         "unclear": {"type": "boolean"},
+        "factual": {"type": "boolean"},
         "question": {"type": "string"},
         "steps": {
             "type": "array",
@@ -68,6 +70,7 @@ understood: the user's message with misspelled words, speech-recognition slips a
 Use the recent conversation, when given, to resolve words like "it", "that" or "again".
 language: two-letter code of the language the user used (en, hi, te, ta). Hindi written in English letters (Hinglish, like "mujhe batao") counts as hi.
 unclear: true only when the request cannot be understood. Then put a short clarifying question in "question".
+factual: true when the answer would state checkable facts about the world (people, places, dates, numbers, science, history, health, products, how things work); false for chat, opinions, advice, jokes, creative writing, code, the user's own data, or doing a task.
 steps: the steps needed, each with "text" and "skill". "skill" is one of the names below.
 Use a skill whenever one can do what the user asked: anything on their computer (volume, music, apps, battery, \
 opening links or folders), websites, apps and code and their previews, web forms and quizzes, 3D objects, orders, and \
@@ -233,10 +236,11 @@ class Agent:
             understood = str(plan.get("understood") or "")
             plan = {**plan, "restatement": str(plan["restatement"]), "steps": steps,
                     "unclear": plan.get("unclear") is True, "question": str(plan.get("question") or ""),
+                    "factual": plan.get("factual") is True,
                     "understood": understood if is_spelling_fix(turn.text, understood) else ""}
         except (ValueError, KeyError, TypeError, AttributeError):  # the model broke the schema: carry on without a plan
             plan = {"restatement": turn.text[:140], "language": "", "unclear": False, "question": "", "steps": [],
-                    "understood": ""}
+                    "understood": "", "factual": False}
         language = turn.language or _language(turn.text, str(plan.get("language", ""))[:2].lower())
         language = language[:2].lower()
         plan["language"] = language if language in LANGUAGES else "en"
@@ -276,6 +280,14 @@ class Agent:
                 return answer, plan
             todo -= {"fill_form", "submit_form"}
         pages = "" if link else await self._read_links(turn, plan, todo)
+        if plan["factual"] and not pages and not link and "web_search" in self.skills and not todo & SOURCED:
+            # facts come from a source the user can open, not from the model's memory alone
+            found, *_ = await self._run_skill(ToolCall("web_search", {"query": plan["understood"] or turn.text}),
+                                              turn, plan)
+            pages = ("\n\nThe web was searched for this question. Answer from these results, cite each source you use "
+                     "as a Markdown link like [Wikipedia](https://...), and say so if they do not answer it:"
+                     f"\n{_wrap_data(found)}")
+            todo.discard("web_search")
         system += pages
         if shortlisted and not pages and URL_RE.search(turn.text) and "web_fetch" in self.skills:
             todo.add("web_fetch")  # the link was left to an offered tool, which may be the wrong one: keep it readable
@@ -291,11 +303,14 @@ class Agent:
                 "user's own computer and can open links, forms and apps through these tools.")
         answer, last_summary = "", last if link else ""
         read_out, unspoken = False, list[str]()  # a final result was spoken; results the model has not worded yet
+        evidence = [pages] if pages else []  # what tools found, to check the answer against before it is final
+        held: int | None = None  # where the reply being held back for that check starts in `answer`
         for step in range(settings().agent_max_steps):
             offered = set(todo)
             tools = [as_tool(self.skills[n]) for n in sorted(offered)] or None
             calls, start, first, tokens = [], time.perf_counter(), 0.0, 0
             step_started_text = False
+            hold = bool(evidence)  # once tools have found something, the reply is checked before it is shown or spoken
             # a planned skill is called on the first round: small models answered "done" or "I can't" without it
             force = step == 0 and not shortlisted and bool(tools)
             async for event in llm_stream(self.llms, messages, tools, force_tool=force):
@@ -306,7 +321,10 @@ class Agent:
                         chunk = " " + chunk
                     step_started_text = True
                     answer += chunk
-                    await turn.emit("answer.delta", text=chunk)
+                    if hold:
+                        held = len(answer) - len(chunk) if held is None else held
+                    else:
+                        await turn.emit("answer.delta", text=chunk)
                 calls += event.tool_calls
                 tokens = max(tokens, event.tokens)
             record("llm", turn.user_id, units=tokens, latency_ms=round((time.perf_counter() - start) * 1000))
@@ -314,6 +332,9 @@ class Agent:
                 record("llm_first_token", turn.user_id, latency_ms=round(first * 1000))
             if not calls:
                 break
+            if held is not None:  # words said while calling a tool ("let me check") are not the answer: no check
+                await turn.emit("answer.delta", text=answer[held:])
+                held = None
             unspoken = [] if answer and not read_out else unspoken  # the model worded the earlier ones
             messages.append({
                 "role": "assistant", "content": "",
@@ -339,6 +360,7 @@ class Agent:
                     messages.append({"role": "tool", "tool_name": call.name, "content": READ_OUT})
                 else:
                     unspoken.append(last_summary)
+                    evidence.append(last_summary)
                     messages.append({"role": "tool", "tool_name": call.name, "content": _wrap_data(last_summary)})
             if shortlisted:  # the shortlist is a one-time offer, except a call whose arguments need fixing
                 todo &= retry
@@ -348,6 +370,14 @@ class Agent:
                 for summary in unspoken:
                     answer += await self._say(turn, answer, summary)
                 break
+        if held is not None:
+            reply = DATA_TAG_RE.sub("", answer[held:]).strip()
+            if not read_out:
+                reply = await brain.check(lambda m, schema=None: self.complete(turn.user_id, m, schema), turn.text,
+                                          reply, "\n\n".join(evidence))
+            gap = " " if answer[:held] and not answer[:held][-1].isspace() and reply else ""
+            answer = answer[:held] + gap + reply
+            await turn.emit("answer.delta", text=gap + reply)
         answer = DATA_TAG_RE.sub("", answer).strip()  # a model sometimes echoes the <data> wrapper
         if not answer:
             answer = last_summary or "Sorry, I didn't get that. Could you say it another way?"

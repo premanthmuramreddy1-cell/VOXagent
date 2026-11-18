@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.agent import Agent
 from app.db import Activity, ErrorEvent, SessionLocal
 from app.providers import ProviderError, ToolCall, first_ok, llm_stream
-from app.skills import Permission, SkillResult, discover
+from app.skills import Permission, SkillResult, discover, web_tools
 from app.spoken import normalize
 from tests.fakes import EchoSkill, FakeLLM, Recorder, call, plan
 
@@ -43,7 +43,7 @@ def test_agent_runs_planned_skill_and_ticks_checklist():
     assert answer == "I echoed hi." and echo.runs == 1
     assert rec.types() == [
         "agent.restate", "plan.created", "tool.started", "tool.finished", "plan.step", "plan.step",
-        "answer.delta", "answer.delta",
+        "answer.delta",  # the reply after a tool is held, checked against its output, then sent in one piece
     ]
     assert all(step["done"] for step in final_plan["steps"])
     assert llm.calls[1]["tools"][0]["function"]["name"] == "echo"
@@ -63,7 +63,19 @@ def test_a_planned_skill_is_forced_on_the_first_round_only(monkeypatch):
     monkeypatch.setattr(agent_mod, "llm_stream", spy)
     run(Agent([FakeLLM(plan([("Echo it", "echo")]), call(text="hi"), "done")], {"echo": EchoSkill()}), Recorder())
     run(Agent([FakeLLM(plan(), "Just chatting.")], {"echo": EchoSkill()}), Recorder())
-    assert forced == [False, True, False, False, False]  # plan, forced call, free answer; then plan, chat
+    # plan, forced call, free answer, self-check against the tool output; then plan, chat (no tool: no check)
+    assert forced == [False, True, False, False, False, False]
+
+
+def test_an_answer_the_tool_output_contradicts_is_corrected_before_it_is_final():
+    fix = {"ok": False, "problems": ["the echo said hi"], "fixed": "The echo said hi."}
+    llm = FakeLLM(plan([("Echo it", "echo")]), call(text="hi"), "The echo said bye.", fix)
+    rec = Recorder()
+    answer, _ = run(Agent([llm], {"echo": EchoSkill()}), rec)
+    assert answer == "The echo said hi."
+    said = "".join(p["text"] for t, p in rec.events if t == "answer.delta")
+    assert said == "The echo said hi."  # the wrong version was never shown, so never spoken
+    assert "echoed hi" in llm.calls[3]["messages"][1]["content"]  # checked against what the tool returned
 
 
 def test_agent_keeps_tool_call_id_and_signature_in_history():
@@ -94,13 +106,14 @@ def test_coding_skills_ask_the_code_models_and_others_the_main_ones(skill, coder
     coder = FakeLLM("coder reply")
     run(Agent([main], {skill: AskingSkill(skill)}, [coder]), Recorder())
     assert bool(coder.calls) is coder_asked
-    assert len(main.calls) == (3 if coder_asked else 4)  # plan, tool call, [skill's own question], answer
+    # plan, tool call, [skill's own question], answer, self-check of the answer against the tool output
+    assert len(main.calls) == (4 if coder_asked else 5)
 
 
 def test_without_code_models_coding_skills_use_the_main_chain():
     main = FakeLLM(plan([("Review", "code_review")]), call("code_review", text="x"), "review", "done")
     run(Agent([main], {"code_review": AskingSkill("code_review")}), Recorder())
-    assert len(main.calls) == 4
+    assert len(main.calls) == 5  # plan, tool call, the skill's question, answer, self-check
 
 
 def test_agent_only_offers_skills_the_plan_asked_for():
@@ -498,3 +511,34 @@ def test_attached_file_is_named_to_the_model_and_explain_is_offered():
     for said in (planner_said, model_said):
         assert "calc.py" in said and "explain" in said
     assert "explain" in [t["function"]["name"] if "function" in t else t["name"] for t in llm.calls[1]["tools"]]
+
+
+class FakeSearch:
+    name, input_schema, permission = "web_search", web_tools.SearchArgs, Permission.READ
+    description = "Search the web."
+
+    def __init__(self):
+        self.queries = []
+
+    async def run(self, args, ctx):
+        self.queries.append(args.query)
+        return SkillResult("Tokyo has about 14 million people (https://stat.example/tokyo)",
+                           {"results": [{"title": "Tokyo stats", "url": "https://stat.example/tokyo", "snippet": ""}]})
+
+
+def test_a_factual_question_is_answered_from_a_web_search_with_its_sources():
+    search = FakeSearch()
+    llm = FakeLLM({**plan(restatement="Tokyo population"), "factual": True}, "About 14 million [stat.example].",
+                  {"ok": True, "problems": [], "fixed": ""})
+    rec = Recorder()
+    answer, _ = run(Agent([llm], {"web_search": search}), rec)
+    assert search.queries and answer == "About 14 million [stat.example]."
+    finished = next(p for t, p in rec.events if t == "tool.finished")
+    assert finished["data"]["results"][0]["url"] == "https://stat.example/tokyo"  # shown under the answer as a source
+    assert "14 million people" in llm.calls[1]["messages"][0]["content"]  # the answer was written from the search
+
+
+def test_chat_and_tasks_are_not_sent_to_the_web():
+    search = FakeSearch()
+    run(Agent([FakeLLM(plan(), "Hi!")], {"web_search": search}), Recorder())
+    assert search.queries == []

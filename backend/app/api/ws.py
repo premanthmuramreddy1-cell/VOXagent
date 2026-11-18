@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
-from app import personal
+from app import brain, personal
 from app import providers as prov
 from app.agent import Agent, Turn
 from app.config import settings
@@ -40,6 +40,7 @@ def speakable(text: str) -> str:
     """Drop Markdown symbols the screen draws but a voice would read out ("asterisk", "hash")."""
     return INLINE_MARK.sub("", LINE_MARK.sub("", LINK.sub(r"\1", text)))
 BYTES_PER_S = prov.SAMPLE_RATE * 2
+LEARNING: set[asyncio.Task] = set()  # preference learning still running after its turn ended
 SORRY = "Sorry, I didn't catch that. Could you say it again?"
 CHANNEL_TTL_S = 3600
 MAX_CHANNELS = 200
@@ -231,6 +232,9 @@ async def _turn(channel: Channel, user: User, session_id: str, text: str, pcm: b
     with SessionLocal() as db:
         db.add(Message(session_id=session_id, role="assistant", text=answer, language=plan["language"], plan=plan))
         db.commit()
+    learning = asyncio.create_task(brain.learn(lambda m, schema=None: agent.complete(user.id, m, schema), user.id, text))
+    LEARNING.add(learning)  # held until done: a bare task can be garbage-collected mid-run
+    learning.add_done_callback(LEARNING.discard)
     await channel.emit("answer.done", text=answer)
     await speaker.finish()
 

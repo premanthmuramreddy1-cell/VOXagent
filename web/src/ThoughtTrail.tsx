@@ -12,6 +12,7 @@ const LABELS: Record<string, string> = {
   write_file: 'Writing a file', edit_file: 'Editing a file', search_in_files: 'Searching the project',
   build_object: 'Building it in 3D', fill_form: 'Filling the form', submit_form: 'Submitting the form',
   groceries: 'Finding groceries', system_control: 'Using your computer',
+  recall: 'Searching your memory', deep_research: 'Researching in depth', agent_team: 'Working as a team',
 }
 
 function toolLabel(skill: string): string {
