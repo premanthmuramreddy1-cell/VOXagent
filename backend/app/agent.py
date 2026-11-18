@@ -37,7 +37,17 @@ FACT_QUESTION = re.compile(r"^\s*(what|who|whom|when|where|which|why|how (many|m
                            r"deep|does|do|did|is|are)|is it true|tell me about|explain|define)\b\S*(\s+\S+){2,}", re.I)
 PERSONAL = re.compile(r"\b(i|me|my|mine|we|our|you|your|yourself)\b", re.I)  # about the user or the assistant: not the web
 RECALL_CUE = re.compile(r"\b(i (told|said|mentioned|shared|sent|asked|wrote|saved|gave)|did i (say|tell|mention|send|"
-                        r"share|ask)|we (talked|discussed|decided|spoke|agreed)|remind me what)\b", re.I)
+                        r"share|ask)|we (talked|discussed|decided|spoke|agreed)|remind me what)\b"
+                        r"|^\s*(what|when|where|who)('s| is| was| were) (that|those)\b", re.I)  # "what was that appointment?"
+# about their own past or plans ("how much did I spend", "my passport"), not "where can I buy a mouse"
+MINE = re.compile(r"\b(my|mine|our)\b|\bdid (i|we)\b|\b(i|we) (did|was|were|had|spent|paid|bought|went|met|told|said)\b"
+                  r"|\b(do|should) (i|we) (need|have) to\b", re.I)
+# With ~80 skills the planner picks code tools for "what causes earthquakes" and drives the Mac for "how do I..."
+PROJECT_TOOLS = {"explain", "ask_project", "list_files"}  # only about the user's own code
+CODE_HINT = re.compile(r"\b(code|codebase|file|files|folder|repo|project|script|module|stack trace|exception|traceback|"
+                       r"compiler?|line \d+)\b|\b(this|the|a|my|that) (function|class|method|bug|error)\b"
+                       r"|\w\.(py|ts|tsx|js|go|rs|java|md|json)\b", re.I)  # "family function" is not code
+HOW_TO = re.compile(r"^\s*how (do|can|should|would) (i|we)\b", re.I)
 # gpt-oss cites as 【title】(url) or 【url】: rewritten to a Markdown link the screen can open
 BRACKET_LINK_RE = re.compile(r"【([^】]*)】\s*\((https?://[^)\s]+)\)|【(https?://[^】\s]+)】")
 SMALL_TALK = re.compile(r"^\W*(thanks?( you| a lot| so much)?|thank u|ty|ok(ay)?|cool|great|nice|awesome|perfect|"
@@ -167,7 +177,8 @@ def _language(text: str, guess: str) -> str:
 
 
 def _links(text: str) -> str:
-    return BRACKET_LINK_RE.sub(lambda m: f"[{m[1] or 'source'}]({m[2]})" if m[2] else f"[source]({m[3]})", text)
+    text = BRACKET_LINK_RE.sub(lambda m: f"[{m[1] or 'source'}]({m[2]})" if m[2] else f"[source]({m[3]})", text)
+    return re.sub(r"\s*【([^】]*)】", r" (\1)", text)  # a source named with no link: kept as plain text
 
 
 def _wrap_data(text: str) -> str:
@@ -263,14 +274,19 @@ class Agent:
     async def run(self, turn: Turn) -> tuple[str, dict[str, Any]]:
         """Handle one user turn. Returns the answer text and the plan."""
         plan = await self.plan(turn)
+        plan = {**plan, "steps": [s for s in plan["steps"] if not (
+            s["skill"] in PROJECT_TOOLS and not CODE_HINT.search(turn.text)
+            or s["skill"] == "web_fetch" and not URL_RE.search(turn.text)
+            or s["skill"] == "screen_control" and HOW_TO.search(turn.text))]}
         asked = turn.text.rstrip().endswith("?") or bool(FACT_QUESTION.search(turn.text))
         steps = {s["skill"] for s in plan["steps"]}
-        if "recall" in self.skills and "recall" not in steps and (
-                RECALL_CUE.search(turn.text) and (plan["unclear"] or not steps)
-                or asked and plan["unclear"]  # "that appointment with the tooth doctor?": theirs, look before asking
-                or asked and PERSONAL.search(turn.text) and steps <= {"web_search"}):  # "when do I renew my passport?"
-            plan = {**plan, "unclear": False, "steps": [{"text": "Look through what you told me", "skill": "recall",
-                                                         "done": False}, *plan["steps"]]}
+        # run before the model, like the web search below: a planned step was skipped when the model chose another tool
+        lookup = "recall" in self.skills and "recall" not in steps and not CODE_HINT.search(turn.text) and bool(
+            RECALL_CUE.search(turn.text) and (plan["unclear"] or not steps)
+            or asked and plan["unclear"]  # "that appointment with the tooth doctor?": theirs, look before asking
+            or FACT_QUESTION.search(turn.text) and MINE.search(turn.text))  # "how much did I spend on food?"
+        if lookup:
+            plan = {**plan, "unclear": False}
         if plan["unclear"] and plan["question"] and not FORM_LINK_RE.search(turn.text):  # a form link is the request
             await turn.emit("clarify", question=plan["question"], language=plan["language"])
             return plan["question"], plan
@@ -305,10 +321,13 @@ class Agent:
                 return answer, plan
             todo -= {"fill_form", "submit_form"}
         pages = "" if link else await self._read_links(turn, plan, todo)
-        factual = (plan["factual"] or (not plan["steps"] and bool(FACT_QUESTION.search(turn.text))
-                                       and not PERSONAL.search(turn.text))) and not SMALL_TALK.search(turn.text)
+        factual = (plan["factual"] or (not steps - {"recall"} and bool(FACT_QUESTION.search(turn.text))
+                                       and not PERSONAL.search(re.sub(r"^\s*(tell|show|teach) me\b", "", turn.text,
+                                                                      flags=re.I))))  # "tell me about X" is not personal
+        factual = factual and not SMALL_TALK.search(turn.text)
         planned = {s["skill"] for s in plan["steps"]}  # an offered (shortlisted) tool is not a plan to fetch sources
-        if factual and not pages and not link and "web_search" in self.skills and not planned & (SOURCED | {"recall"}):
+        mine = lookup and MINE.search(turn.text)  # about their own life: their history answers it, not the web
+        if factual and not pages and not link and "web_search" in self.skills and not planned & SOURCED and not mine:
             # facts come from a source the user can open, not from the model's memory alone
             found, *_ = await self._run_skill(ToolCall("web_search", {"query": plan["understood"] or turn.text}),
                                               turn, plan)
@@ -316,6 +335,10 @@ class Agent:
                      "as a Markdown link like [Wikipedia](https://...), and say so if they do not answer it:"
                      f"\n{_wrap_data(found)}")
             todo -= SOURCED  # answered from the search: no news briefing standing in for the facts
+        if lookup:
+            found, *_ = await self._run_skill(ToolCall("recall", {"query": plan["understood"] or turn.text}), turn, plan)
+            pages += ("\n\nThe user's own past chats, notes and files were searched for this. If they answer it, answer "
+                      "from them and say where it came from; if not, answer normally:\n" + _wrap_data(found))
         system += pages
         if shortlisted and not pages and URL_RE.search(turn.text) and "web_fetch" in self.skills:
             todo.add("web_fetch")  # the link was left to an offered tool, which may be the wrong one: keep it readable

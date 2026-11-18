@@ -587,7 +587,7 @@ def test_a_question_about_what_the_user_said_before_searches_their_history():
 
     recall = FakeRecall()
     unclear = {**plan(), "unclear": True, "question": "Which cooking thing?"}
-    llm = FakeLLM(unclear, call("recall", query="cooking"), "You told me to marinate paneer in yogurt.")
+    llm = FakeLLM(unclear, "You told me to marinate paneer in yogurt.")
     answer, _ = run(Agent([llm], {"recall": recall}), Recorder(), text="What was that cooking thing I told you about?")
     assert recall.queries and "paneer" in answer  # looked it up instead of asking the user to repeat it
 
@@ -646,7 +646,7 @@ def _recall_skill():
 def test_an_unclear_question_without_a_cue_looks_in_the_history_before_asking():
     recall = _recall_skill()
     unclear = {**plan(), "unclear": True, "question": "Whose function?"}
-    llm = FakeLLM(unclear, call("recall", query="family function"), "Priya's wedding, on 14 February.")
+    llm = FakeLLM(unclear, "Priya's wedding, on 14 February.")
     rec = Recorder()
     answer, _ = run(Agent([llm], {"recall": recall}), rec, text="whose family function is coming up?")
     assert recall.queries and "Priya" in answer and not any(t == "clarify" for t, _ in rec.events)
@@ -654,7 +654,7 @@ def test_an_unclear_question_without_a_cue_looks_in_the_history_before_asking():
 
 def test_a_personal_question_checks_the_history_before_the_web():
     recall, search = _recall_skill(), FakeSearch()
-    llm = FakeLLM({**plan(), "factual": True}, call("recall", query="passport"), "Renew it in January.")
+    llm = FakeLLM({**plan(), "factual": True}, "Renew it in January.")
     answer, _ = run(Agent([llm], {"recall": recall, "web_search": search}), Recorder(),
                     text="When do I need to renew my passport?")
     assert recall.queries and search.queries == [] and answer == "Renew it in January."
@@ -665,3 +665,46 @@ def test_a_plain_unclear_command_still_asks():
     rec = Recorder()
     run(Agent([FakeLLM({**plan(), "unclear": True, "question": "Book what?"})], {"recall": recall}), rec, text="book it")
     assert recall.queries == [] and any(t == "clarify" for t, _ in rec.events)
+
+
+def test_code_tools_and_a_linkless_fetch_are_dropped_for_a_general_question():
+    search = FakeSearch()
+    planned = {**plan(), "steps": [{"text": "x", "skill": "web_fetch"}, {"text": "y", "skill": "ask_project"}]}
+    llm = FakeLLM(planned, "Built by Shah Jahan.", {"ok": True, "problems": [], "fixed": ""})
+    skills = {"web_search": search, "web_fetch": FakeSearch(), "ask_project": FakeSearch()}
+    _, used = run(Agent([llm], skills), Recorder(), text="tell me about the Taj Mahal")
+    assert search.queries and used["steps"] == []  # the fact was searched, not the project
+
+
+def test_a_first_person_question_checks_memory_even_when_another_tool_is_planned():
+    recall = _recall_skill()
+    planned = {**plan(), "steps": [{"text": "x", "skill": "list_payments"}]}
+
+    class FakePayments(FakeSearch):
+        name = "list_payments"
+
+    llm = FakeLLM(planned, call("list_payments", query="groceries"), "11,000 in November.")
+    run(Agent([llm], {"recall": recall, "list_payments": FakePayments()}), Recorder(),
+        text="how much did I spend on groceries last month?")
+    assert recall.queries
+
+
+def test_a_source_named_without_a_link_is_left_as_plain_text():
+    llm = FakeLLM({**plan(), "factual": True}, "828 m【Burj Khalifa - Wikipedia】.", {"ok": True, "problems": [], "fixed": ""})
+    answer, _ = run(Agent([llm], {"web_search": FakeSearch()}), Recorder(), text="How tall is the Burj Khalifa?")
+    assert answer == "828 m (Burj Khalifa - Wikipedia)."
+
+
+def test_a_question_about_the_users_code_goes_to_the_code_tools_not_memory():
+    recall = _recall_skill()
+    run(Agent([FakeLLM(plan(), "It runs turns.")], {"recall": recall}), Recorder(),
+        text="what does app/agent.py do in my project?")
+    assert recall.queries == []
+
+
+def test_a_general_fact_is_searched_even_when_the_planner_picks_memory():
+    search = FakeSearch()
+    planned = {**plan(), "steps": [{"text": "x", "skill": "recall"}]}
+    llm = FakeLLM(planned, call("recall", query="Taj Mahal"), "A marble tomb in Agra.", {"ok": True, "problems": [], "fixed": ""})
+    run(Agent([llm], {"recall": _recall_skill(), "web_search": search}), Recorder(), text="tell me about the Taj Mahal")
+    assert search.queries
