@@ -40,6 +40,8 @@ RECALL_CUE = re.compile(r"\b(i (told|said|mentioned|shared|sent|asked|wrote|save
                         r"share|ask)|we (talked|discussed|decided|spoke|agreed)|remind me what)\b", re.I)
 # gpt-oss cites as 【title】(url) or 【url】: rewritten to a Markdown link the screen can open
 BRACKET_LINK_RE = re.compile(r"【([^】]*)】\s*\((https?://[^)\s]+)\)|【(https?://[^】\s]+)】")
+SMALL_TALK = re.compile(r"^\W*(thanks?( you| a lot| so much)?|thank u|ty|ok(ay)?|cool|great|nice|awesome|perfect|"
+                        r"hi|hello|hey|bye|good (morning|night|evening|afternoon)|yes|no|yep|nope|lol|haha)\W*$", re.I)
 SOURCED = {"web_search", "web_fetch", "deep_research", "agent_team", "world_briefing"}  # bring their own sources
 CODE_SKILLS = {"code_review", "ask_project", "generate_code", "fix_and_run", "create_project"}  # use VOX_LLM_CODE
 DECLINED = "The user declined this action, so it was not done."
@@ -299,16 +301,17 @@ class Agent:
                 return answer, plan
             todo -= {"fill_form", "submit_form"}
         pages = "" if link else await self._read_links(turn, plan, todo)
-        factual = plan["factual"] or (not plan["steps"] and bool(FACT_QUESTION.search(turn.text))
-                                      and not PERSONAL.search(turn.text))  # backstop if the planner misses one
-        if factual and not pages and not link and "web_search" in self.skills and not todo & SOURCED:
+        factual = (plan["factual"] or (not plan["steps"] and bool(FACT_QUESTION.search(turn.text))
+                                       and not PERSONAL.search(turn.text))) and not SMALL_TALK.search(turn.text)
+        planned = {s["skill"] for s in plan["steps"]}  # an offered (shortlisted) tool is not a plan to fetch sources
+        if factual and not pages and not link and "web_search" in self.skills and not planned & SOURCED:
             # facts come from a source the user can open, not from the model's memory alone
             found, *_ = await self._run_skill(ToolCall("web_search", {"query": plan["understood"] or turn.text}),
                                               turn, plan)
             pages = ("\n\nThe web was searched for this question. Answer from these results, cite each source you use "
                      "as a Markdown link like [Wikipedia](https://...), and say so if they do not answer it:"
                      f"\n{_wrap_data(found)}")
-            todo.discard("web_search")
+            todo -= SOURCED  # answered from the search: no news briefing standing in for the facts
         system += pages
         if shortlisted and not pages and URL_RE.search(turn.text) and "web_fetch" in self.skills:
             todo.add("web_fetch")  # the link was left to an offered tool, which may be the wrong one: keep it readable

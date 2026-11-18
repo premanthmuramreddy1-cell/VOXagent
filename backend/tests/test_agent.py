@@ -606,3 +606,23 @@ def test_the_shown_reply_and_the_saved_answer_match_after_link_fixing():
     answer, _ = run(Agent([llm], {"web_search": FakeSearch()}), rec, text="How big is Tokyo?")
     shown = "".join(p["text"] for t, p in rec.events if t == "answer.delta")
     assert shown == answer == "Big [source](https://b.example/x)."
+
+
+def test_small_talk_is_never_sent_to_the_web_even_if_the_planner_says_factual():
+    search = FakeSearch()
+    run(Agent([FakeLLM({**plan(), "factual": True}, "You're welcome!")], {"web_search": search}), Recorder(),
+        text="thanks!")
+    assert search.queries == []
+
+
+def test_an_offered_news_tool_does_not_replace_the_search_for_a_fact():
+    class FakeBriefing(FakeSearch):
+        name = "world_briefing"
+        description = "Population news and headlines for India and other countries."  # gets it shortlisted
+
+    search, briefing = FakeSearch(), FakeBriefing()
+    llm = FakeLLM({**plan(), "factual": True}, "About 1.45 billion.", {"ok": True, "problems": [], "fixed": ""})
+    run(Agent([llm], {"web_search": search, "world_briefing": briefing}), Recorder(),
+        text="What is the population of India?")
+    assert search.queries and briefing.queries == []
+    assert all(t["function"]["name"] != "world_briefing" for t in llm.calls[1]["tools"] or [])
