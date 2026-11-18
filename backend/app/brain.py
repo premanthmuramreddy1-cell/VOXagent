@@ -1,5 +1,6 @@
 """Self-checking answers against the evidence the tools found, and learning the user's preferences as they talk."""
 
+import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -51,6 +52,7 @@ LEARNER = ("Extract lasting facts and preferences about the user from their mess
            "Celsius' -> 'uses Celsius'; 'I'm vegetarian' -> 'is vegetarian'. Cover name, answer length and tone, units, "
            "favourites, diet, job, city, language. Skip one-off requests and anything about other people. Never "
            "include passwords, card or ID numbers. Return an empty list when there is nothing lasting.")
+RETRY_PAUSE = 5.0  # seconds
 SECRET = re.compile(r"\d{6,}|password|passcode|pin\b|otp|cvv", re.I)
 
 
@@ -58,11 +60,15 @@ async def learn(complete: Complete, user_id: str, text: str) -> list[str]:
     """Save the lasting preferences in one user message as memories; returns the new ones."""
     if not PREFERENCE_CUE.search(text):
         return []
-    try:
-        found = json.loads(await complete([{"role": "system", "content": LEARNER},
-                                           {"role": "user", "content": text[:2000]}], LEARN_SCHEMA))["preferences"]
-    except Exception:  # learning is best effort, after the answer was given
-        return []
+    for attempt in range(3):  # free providers rate-limit in bursts: a missed preference is lost for good
+        try:
+            found = json.loads(await complete([{"role": "system", "content": LEARNER},
+                                               {"role": "user", "content": text[:2000]}], LEARN_SCHEMA))["preferences"]
+            break
+        except Exception:  # learning is best effort, after the answer was given
+            if attempt == 2:
+                return []
+            await asyncio.sleep(RETRY_PAUSE * (attempt + 1))
     saved = []
     with SessionLocal() as db:
         lines = [line for line in (str(p).strip()[:200] for p in found[:5]) if len(line.split()) >= 2]  # a bare "Captain" is not usable

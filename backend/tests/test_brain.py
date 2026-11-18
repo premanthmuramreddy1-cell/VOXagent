@@ -208,3 +208,15 @@ def test_learn_keeps_the_users_own_words_when_the_model_returns_only_fragments()
     complete, _ = scripted(json.dumps({"preferences": ["concise", "brief"]}))
     saved = asyncio.run(brain.learn(complete, uid, "Keep your answers under 25 words from now on."))
     assert saved == ['in their words: "Keep your answers under 25 words from now on."']
+
+
+def test_learning_retries_when_the_models_are_busy(monkeypatch):
+    monkeypatch.setattr(brain, "RETRY_PAUSE", 0)
+    replies = iter([RuntimeError("rate limited"), '{"preferences": ["wants answers in pirate talk"]}'])
+
+    async def complete(messages, schema=None):
+        r = next(replies)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    assert asyncio.run(brain.learn(complete, "u-retry", "From now on talk like a pirate.")) == ["wants answers in pirate talk"]
