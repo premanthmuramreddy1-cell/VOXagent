@@ -7,7 +7,6 @@ import Assistant from './Assistant'
 import Integrations from './Integrations'
 import Chat from './Chat'
 import Swarm from './Swarm'
-import type { Formation } from './swarmEngine'
 import Reviews, { SharedReview } from './Review'
 import {
   KeyRound,
@@ -57,7 +56,6 @@ const MARK = Array.from({ length: 34 }, (_, i) => {
   return { x: 16 + r * Math.cos(a), y: 16 + r * Math.sin(a) * 0.86, s: 1.5 - (r / 12) * 0.7 }
 })
 
-const FORMATION: Record<string, Formation> = { '': 'brain', workspace: 'lattice', me: 'helix', reviews: 'ring', account: 'ring', admin: 'ring' }
 
 function Logo({ className = '', compact = false }: { className?: string; compact?: boolean }) {
   return (
@@ -588,7 +586,7 @@ export default function App() {
   if (!user) {
     return (
       <>
-        <Swarm formation="brain" dark={dark} />
+        <Swarm formation="grid" dark={dark} />
         <Login onUser={setUser} />
       </>
     )
@@ -605,7 +603,7 @@ export default function App() {
 
   return (
     <>
-    <Swarm formation={FORMATION[page] ?? 'brain'} dark={dark} />
+    <Swarm formation="grid" dark={dark} />
     <div className="relative z-10 flex h-full flex-col overflow-hidden text-ink">
       {/* Top Navigation Bar */}
       <header className="no-print sticky top-0 z-30 flex h-14 shrink-0 items-center justify-between border-b border-line bg-surface px-4 sm:px-6 glass">

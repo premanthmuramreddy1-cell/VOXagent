@@ -2,7 +2,7 @@
  * The nanobot swarm: up to ~1M points drawn by WebGL2 with no vertex buffers. Every bot's position is derived on
  * the GPU from gl_VertexID, so a frame costs one draw call and a handful of uniforms; nothing is allocated per frame.
  *
- * Formations (brain, lattice, helix, ring) morph into each other; moods (idle, listen, think, speak) bend the
+ * Formations (brain, grid, helix, ring) morph into each other; moods (idle, listen, think, speak) bend the
  * current formation. Bots assemble out of scattered dust when the swarm starts.
  *
  * Shapes (objects, imported models, text; see shapes.ts) live in two float textures, so the swarm can morph from a
@@ -17,12 +17,12 @@ export function setSwarmMood(mood: Mood) {
   window.dispatchEvent(new CustomEvent<Mood>('vox:swarm', { detail: mood }))
 }
 
-export const FORMATIONS = { brain: 0, lattice: 1, helix: 2, ring: 3 } as const
+export const FORMATIONS = { brain: 0, grid: 1, helix: 2, ring: 3 } as const
 export type Formation = keyof typeof FORMATIONS
 
 const VERTEX = `#version 300 es
 precision highp float;
-uniform float uTime, uCount, uAssemble, uMorph, uFromForm, uToForm, uDpr, uLight, uAspect, uSteady, uShift;
+uniform float uTime, uCount, uAssemble, uMorph, uFromForm, uToForm, uDpr, uLight, uAspect, uSteady, uShift, uWidth;
 uniform highp sampler2D uShapeA, uShapeB;  // SHAPE_SIDE x SHAPE_SIDE points, xyz in rgb
 uniform vec4 uMood;       // idle, listen, think, speak weights
 uniform float uLevel, uPitch;  // live voice: loudness and brightness, 0..1 (audio.ts sampleVoice)
@@ -55,11 +55,7 @@ vec3 formation(float form, float id, float t, float s1, float s2) {
     p += 0.035 * sin(p.yzx * 17.0 + s1 * 6.2831);
     return p;
   }
-  if (form < 1.5) {                          // lattice: a tilted floor of bots in a grid
-    float side = floor(sqrt(uCount));
-    float gx = mod(id, side) / side - 0.5, gz = floor(id / side) / side - 0.5;
-    return vec3(gx * 2.4, -0.38 + 0.03 * sin(gx * 18.0) * cos(gz * 18.0) + (s1 - 0.5) * 0.01, gz * 2.4);
-  }
+  if (form < 1.5) return vec3(0.0);           // grid: placed flat on the screen at the end of main()
   if (form < 2.5) {                          // helix: a double strand with rungs
     float a = t * 6.2831 * 5.0;
     float strand = s1 < 0.5 ? 0.0 : 3.14159;
@@ -117,6 +113,24 @@ void main() {
   vColor = mix(mix(cyan, violet, clamp(p.y * 0.9 + s1 * 0.5, 0.0, 1.0)), spark, step(0.996 - energy * 0.01, s2));
   vColor = mix(vColor, cyan, uPitch * voiced * 0.55);                       // a brighter voice cools the colour
   vAlpha = (dust ? 0.22 : 0.32 + energy * 0.25 + uLevel * voiced * 0.2) * smoothstep(5.0, 1.5, z) * (uLight > 0.5 ? 1.4 : 1.0);
+
+  // grid: a sparse dot matrix across the whole screen, one bot per cell, a third of the cells left empty
+  float m = smoothstep(0.0, 1.0, uMorph);
+  float grid = (abs(uFromForm - 1.0) < 0.5 ? 1.0 - m : 0.0) + (abs(uToForm - 1.0) < 0.5 ? m : 0.0);
+  if (grid > 0.0) {
+    float cols = ceil(uWidth / 32.0), cell = 2.0 / cols;       // about 32 CSS px apart, square in pixels
+    float rows = ceil(2.0 / (cell * uAspect)) + 1.0;
+    bool on = id < cols * rows && hash(id + 11.0) > 0.33;
+    vec2 g = (vec2(mod(id, cols), floor(id / cols)) + 0.5) * vec2(cell, cell * uAspect) - 1.0;
+    g += (vec2(s1, s2) - 0.5) * cell * 0.2;                      // a little off the exact lattice
+    g.y += cell * 0.06 * sin(time * 0.5 + g.x * 2.5) * calm;     // a slow drift across the rows
+    float wave = 0.5 + 0.5 * sin(length(g * vec2(uAspect, 1.0)) * 6.0 - time * 3.0);
+    float glow = (0.42 + energy * 0.35 * wave + uLevel * voiced * 0.35 * wave) * (uLight > 0.5 ? 2.2 : 1.0) * uAssemble;
+    gl_Position = vec4(mix(gl_Position.xy, g, grid), 0.0, 1.0);
+    gl_PointSize = mix(gl_PointSize, 2.6 * uDpr, grid);
+    vAlpha = mix(vAlpha, on ? glow : 0.0, grid);
+    if (!on && grid > 0.999) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);  // unused bots skip the rasteriser
+  }
 }`
 
 const FRAGMENT = `#version 300 es
@@ -132,7 +146,7 @@ void main() {
 
 const MOODS: Record<Mood, number> = { idle: 0, listen: 1, think: 2, speak: 3 }
 const UNIFORMS = ['uTime', 'uCount', 'uAssemble', 'uMorph', 'uFromForm', 'uToForm', 'uDpr', 'uLight', 'uAspect', 'uMood', 'uPointer',
-  'uSteady', 'uShapeA', 'uShapeB', 'uShift', 'uLevel', 'uPitch'] as const
+  'uSteady', 'uShapeA', 'uShapeB', 'uShift', 'uLevel', 'uPitch', 'uWidth'] as const
 const MORPH_MS = 1700
 const SHAPE_A = 4
 const SHAPE_B = 5
@@ -301,6 +315,7 @@ export class Swarm {
     gl.uniform1f(u.uDpr, dpr)
     gl.uniform1f(u.uLight, this.light ? 1 : 0)
     gl.uniform1f(u.uAspect, w / Math.max(1, h))
+    gl.uniform1f(u.uWidth, w / dpr)
     gl.uniform4fv(u.uMood, this.mood)
     gl.uniform2fv(u.uPointer, this.pointer)
     const m = this.morph * this.morph * (3 - 2 * this.morph)
