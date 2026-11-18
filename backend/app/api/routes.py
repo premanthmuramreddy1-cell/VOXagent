@@ -141,7 +141,7 @@ def _review_json(review: Review) -> dict:
 @router.post("/reviews")
 async def create_review(args: Args, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
     check_daily_limit(db, user, "review", settings().free_daily_reviews)  # 429, not the skill's 400 for bad input
-    agent = Agent(prov.providers().llm, {})
+    agent = Agent(prov.providers().code or prov.providers().llm, {})  # a review is code work
 
     async def quiet(*_args, **_kwargs) -> None: ...
 

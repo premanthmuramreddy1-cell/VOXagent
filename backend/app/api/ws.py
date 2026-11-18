@@ -222,7 +222,7 @@ async def _turn(channel: Channel, user: User, session_id: str, text: str, pcm: b
     if not text:
         return
     history = _save_user_message(user, session_id, text)
-    agent = Agent(prov.providers().llm, discover())
+    agent = Agent(prov.providers().llm, discover(), prov.providers().code)
     with SessionLocal() as db:
         context = personal.context_for(db, user.id)
     turn = Turn(user.id, session_id, text, speaker.emit, channel.confirm, upload_ids, history, language, user.name,

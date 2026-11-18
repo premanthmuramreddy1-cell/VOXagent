@@ -17,9 +17,15 @@ class Settings(BaseSettings):
     google_client_id: str = ""  # OAuth web client id; empty turns Google sign-in off
 
     # Providers, swappable by config. "a,b" means: try a, fall back to b.
-    # cloud:<model> is any OpenAI-compatible API; Gemini by default. flash-lite answers in ~1-3 s, which a voice turn
-    # needs; 3.5-flash-lite is the cloud fallback (3.8-flash timed out under load); ollama answers when the cloud is out.
-    llm: str = "cloud:gemini-3.1-flash-lite,cloud:gemini-3.5-flash-lite,ollama:llama3.2"
+    # cloud:<model> is any OpenAI-compatible API; Gemini by default. All free tiers, smartest first (ranked() keeps
+    # this order): Groq gpt-oss-120b called tools right in 1.6 s; Gemini 3.8 Flash is smart but ~4.5 s; flash-lite
+    # and the local ollama model are last resorts. (3.5-flash took ~20 s; Groq qwen3.8-27b sent broken tool calls.)
+    llm: str = "groq:openai/gpt-oss-120b,cloud:gemini-3.8-flash,cloud:gemini-3.1-flash-lite,ollama:llama3.2"
+    # Models for the skills that write and judge code (agent.CODE_SKILLS); empty means the same chain as `llm`.
+    # scripts/model_bench.py (2026-11-18, 35 hidden tests): gemini-3.8-flash 35/35 ~20 s, gpt-oss-120b 30/35 ~8 s,
+    # nemotron-super 30/35, kimi-k3.1-pro 20/35 (slow); code quality beats speed here, voice is not waiting on it.
+    llm_code: str = ("cloud:gemini-3.8-flash,groq:openai/gpt-oss-120b,openrouter:nvidia/nemotron-3.5-super-vl:free,"
+                     "cloud:gemini-3.1-flash-lite")
     llm_api_key: str = ""  # Gemini key from aistudio.google.com/apikey (or Groq, OpenRouter, z.ai with their base URL)
     llm_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     # groq:<model> in `llm`: models served by Groq (fast first tokens), a key from console.groq.com/keys
@@ -44,7 +50,7 @@ class Settings(BaseSettings):
     max_file_chars: int = 12_000
     max_text_chars: int = 4_000
     max_audio_s: int = 60
-    agent_max_steps: int = 4
+    agent_max_steps: int = 8  # search, read, then act needs room; 4 cut multi-step tasks short
 
     max_workspace_bytes: int = 50_000_000
     public_url: str = "http://localhost:5173"  # where users reach the app; used for links and OAuth redirects

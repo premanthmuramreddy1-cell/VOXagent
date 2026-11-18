@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.agent import Agent
 from app.db import Activity, ErrorEvent, SessionLocal
 from app.providers import ProviderError, ToolCall, first_ok, llm_stream
-from app.skills import Permission, discover
+from app.skills import Permission, SkillResult, discover
 from app.spoken import normalize
 from tests.fakes import EchoSkill, FakeLLM, Recorder, call, plan
 
@@ -79,6 +79,28 @@ def test_talk_only_plan_steps_are_never_shown_as_done_work():
     rec = Recorder()
     _, final_plan = run(Agent([llm], {"echo": EchoSkill()}), rec)
     assert final_plan["steps"] == [] and "plan.created" not in rec.types() and "plan.step" not in rec.types()
+
+
+class AskingSkill(EchoSkill):
+    """A skill that asks the model itself, as code_review and fix_and_run do."""
+
+    async def run(self, args, ctx):
+        return SkillResult(await ctx.complete([{"role": "user", "content": args.text}]), {})
+
+
+@pytest.mark.parametrize("skill, coder_asked", [("code_review", True), ("echo", False)])
+def test_coding_skills_ask_the_code_models_and_others_the_main_ones(skill, coder_asked):
+    main = FakeLLM(plan([("Do it", skill)]), call(skill, text="x"), "main reply", "done")
+    coder = FakeLLM("coder reply")
+    run(Agent([main], {skill: AskingSkill(skill)}, [coder]), Recorder())
+    assert bool(coder.calls) is coder_asked
+    assert len(main.calls) == (3 if coder_asked else 4)  # plan, tool call, [skill's own question], answer
+
+
+def test_without_code_models_coding_skills_use_the_main_chain():
+    main = FakeLLM(plan([("Review", "code_review")]), call("code_review", text="x"), "review", "done")
+    run(Agent([main], {"code_review": AskingSkill("code_review")}), Recorder())
+    assert len(main.calls) == 4
 
 
 def test_agent_only_offers_skills_the_plan_asked_for():

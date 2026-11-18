@@ -32,6 +32,7 @@ HINGLISH = {"hai", "hain", "mujhe", "mera", "meri", "kya", "kar", "karo", "nahi"
             "namaste", "bolo", "bol", "bata", "dikha", "bana", "karna", "acha", "accha", "theek", "haan", "ji", "yaar",
             "kuch", "kaun", "kahan", "kitna", "kitne", "kaisa", "mujhko", "humko", "apna", "apni", "bhai", "dost"}
 SUBMIT_RE = re.compile(r"\b(submit|send)\b", re.IGNORECASE)
+CODE_SKILLS = {"code_review", "ask_project", "generate_code", "fix_and_run", "create_project"}  # use VOX_LLM_CODE
 DECLINED = "The user declined this action, so it was not done."
 READ_OUT = "This result was already read out to the user word for word. Do not repeat it or add to it."
 DATA_TAG_RE = re.compile(r"</?\s*data\s*>", re.IGNORECASE)
@@ -192,18 +193,21 @@ def log_activity(turn: Turn, action: str, reason: str, permission: str = "read",
 
 
 class Agent:
-    def __init__(self, llms: Sequence[LLM], skills: dict[str, Skill]):
+    def __init__(self, llms: Sequence[LLM], skills: dict[str, Skill], code_llms: Sequence[LLM] | None = None):
         self.llms, self.skills = llms, skills
+        self.code_llms = code_llms or llms  # VOX_LLM_CODE: the models that write and judge code
 
-    async def complete(self, user_id: str, messages: list[dict], schema: dict | None = None) -> str:
+    async def complete(self, user_id: str, messages: list[dict], schema: dict | None = None,
+                       llms: Sequence[LLM] | None = None) -> str:
+        chain = llms or self.llms
         start, text, tokens = time.perf_counter(), "", 0
-        for first in range(len(self.llms)):  # a reply cut off at a model's output limit goes to the next model
+        for first in range(len(chain)):  # a reply cut off at a model's output limit goes to the next model
             text, cut_off = "", False
-            async for event in llm_stream(self.llms[first:], messages, schema=schema):
+            async for event in llm_stream(chain[first:], messages, schema=schema):
                 text, tokens, cut_off = text + event.text, max(tokens, event.tokens), cut_off or event.cut_off
             if not cut_off:
                 break
-            log.warning("reply cut off at the output limit", extra={"provider": self.llms[first].name})
+            log.warning("reply cut off at the output limit", extra={"provider": chain[first].name})
         record("llm", user_id, units=tokens, latency_ms=round((time.perf_counter() - start) * 1000))
         return text
 
@@ -406,9 +410,10 @@ class Agent:
                 log_activity(turn, skill.name, reason, skill.permission.value, "declined")
                 return DECLINED, True, False, ""
         await turn.emit("tool.started", skill=skill.name)
+        chain = self.code_llms if skill.name in CODE_SKILLS else self.llms
         ctx = RunContext(
             turn.user_id, turn.session_id, turn.text, turn.upload_ids, turn.emit,
-            lambda messages, schema=None: self.complete(turn.user_id, messages, schema),
+            lambda messages, schema=None: self.complete(turn.user_id, messages, schema, chain),
         )
         start = time.perf_counter()
         try:

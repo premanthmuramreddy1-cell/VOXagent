@@ -470,7 +470,7 @@ def test_cloud_marks_a_reply_that_stopped_at_the_output_limit():
     assert events[-1].cut_off is True
 
 
-def test_live_routing_rests_failed_models_and_prefers_the_fastest(monkeypatch):
+def test_live_routing_rests_failed_models_and_keeps_config_order(monkeypatch):
     import app.providers as prov
     from app.providers import LLMEvent, llm_stream, ranked
 
@@ -494,7 +494,8 @@ def test_live_routing_rests_failed_models_and_prefers_the_fastest(monkeypatch):
     assert 62 < prov.HEALTH["limited"]["until"] - prov.time.monotonic() <= 62.5  # rests until Groq's reset
     assert asyncio.run(ask([limited, slow, fast, local])) == "slow" and limited.calls == 1  # not asked again
     prov.HEALTH["slow"]["speed"], prov.HEALTH["fast"] = 3.0, {"speed": 0.2}
-    assert [m.name for m in ranked([limited, slow, fast, local])] == ["fast", "slow", "limited", "local"]
+    # a faster model never jumps ahead: config order puts the smartest first
+    assert [m.name for m in ranked([limited, slow, fast, local])] == ["slow", "fast", "limited", "local"]
 
 
 def test_a_forced_tool_call_the_model_refuses_is_answered_in_words_instead():

@@ -398,12 +398,13 @@ class Providers:
     llm: Sequence[LLM]
     stt: Sequence[STT]
     tts: Sequence[TTS]
+    code: Sequence[LLM] = ()  # VOX_LLM_CODE; empty means skills use `llm`
 
 
 @lru_cache
 def providers() -> Providers:
     s = settings()
-    return Providers(_build(s.llm), _build(s.stt), _build(s.tts))
+    return Providers(_build(s.llm), _build(s.stt), _build(s.tts), _build(s.llm_code) if s.llm_code.strip() else ())
 
 
 T = TypeVar("T")
@@ -439,15 +440,15 @@ def _rest_for(exc: Exception) -> float:
 
 
 def ranked(candidates: Sequence[LLM]) -> list[LLM]:
-    """Rested models first, fastest measured first (config order breaks ties and ranks the unmeasured); the last
-    model (the local one) stays last."""
+    """Rested models first, in config order (the config lists the smartest first; ranking by speed handed every
+    turn to the fastest, weakest model); resting models next, soonest back first; the last (local) model stays last."""
     if len(candidates) < 2:
         return list(candidates)
     *pool, last = candidates
-    now, order = time.monotonic(), {id(p): i for i, p in enumerate(pool)}
+    now = time.monotonic()
     seen = {p.name: HEALTH.get(p.name, {}) for p in pool}
     tired = sorted((p for p in pool if seen[p.name].get("until", 0) > now), key=lambda p: seen[p.name]["until"])
-    ready = sorted((p for p in pool if p not in tired), key=lambda p: (seen[p.name].get("speed", 1e9), order[id(p)]))
+    ready = [p for p in pool if p not in tired]
     return [*ready, *tired, last]
 
 
