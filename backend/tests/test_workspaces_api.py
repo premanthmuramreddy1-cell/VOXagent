@@ -70,3 +70,28 @@ def test_an_oversized_zip_is_called_too_large_not_broken(client, monkeypatch):
     monkeypatch.setattr(settings(), "max_workspace_bytes", 50)
     r = client.post(f"/workspaces/{ws}/import", headers=headers, files={"file": ("p.zip", b"PK" + b"x" * 100)})
     assert r.status_code == 413
+
+
+def test_files_can_be_renamed_and_deleted_and_undone(client):
+    headers, _ = signup(client)
+    other, _ = signup(client)
+    ws = client.get("/workspaces", headers=headers).json()[0]["id"]
+    files = lambda: client.get(f"/workspaces/{ws}/files", headers=headers).json()["files"]
+    client.put(f"/workspaces/{ws}/file", headers=headers, json={"path": "a.py", "content": "x = 1\n"})
+    client.put(f"/workspaces/{ws}/file", headers=headers, json={"path": "b.py", "content": ""})
+
+    moved = client.post(f"/workspaces/{ws}/file/move", headers=headers, json={"path": "a.py", "to": "src/app.py"})
+    assert moved.status_code == 200 and "src/app.py" in files() and "a.py" not in files()
+    assert client.get(f"/workspaces/{ws}/file", headers=headers, params={"path": "src/app.py"}).json()["content"] == "x = 1\n"
+    taken = client.post(f"/workspaces/{ws}/file/move", headers=headers, json={"path": "b.py", "to": "src/app.py"})
+    assert taken.status_code == 409  # never overwrite another file
+    escape = client.post(f"/workspaces/{ws}/file/move", headers=headers, json={"path": "b.py", "to": "../x.py"})
+    assert escape.status_code == 400
+    assert client.post(f"/workspaces/{ws}/file/move", headers=other, json={"path": "b.py", "to": "c.py"}).status_code == 404
+
+    assert client.delete(f"/workspaces/{ws}/file", headers=other, params={"path": "b.py"}).status_code == 404
+    assert client.delete(f"/workspaces/{ws}/file", headers=headers, params={"path": "b.py"}).status_code == 200
+    assert "b.py" not in files()
+    assert client.delete(f"/workspaces/{ws}/file", headers=headers, params={"path": "b.py"}).status_code == 400
+    assert client.post(f"/workspaces/{ws}/undo", headers=headers).json() == {"undone": "delete b.py"}
+    assert "b.py" in files()

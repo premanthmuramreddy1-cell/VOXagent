@@ -105,6 +105,40 @@ async def save_file(ws_id: str, body: FileBody, user: User = Depends(current_use
     return {"commit": await wsp.commit(wsp.root(ws), f"edit {body.path}")}
 
 
+class MoveBody(BaseModel):
+    path: str
+    to: str
+
+
+@router.post("/{ws_id}/file/move")
+async def move_file(ws_id: str, body: MoveBody, user: User = Depends(current_user),
+                    db: Session = Depends(get_db)) -> dict:
+    """Rename or move a file the user picked in the editor; versioned like a save, so Undo brings it back."""
+    ws = await owned(db, ws_id, user)
+    base = wsp.root(ws)
+    source = _guard(lambda: wsp.safe_path(base, body.path))
+    target = _guard(lambda: wsp.safe_path(base, body.to))
+    if not source.is_file():
+        raise HTTPException(400, f"{body.path} does not exist")
+    if target.exists():
+        raise HTTPException(409, f"{body.to} already exists")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(target)
+    return {"commit": await wsp.commit(base, f"rename {body.path} to {body.to}")}
+
+
+@router.delete("/{ws_id}/file")
+async def delete_file(ws_id: str, path: str, user: User = Depends(current_user),
+                      db: Session = Depends(get_db)) -> dict:
+    """Clicking Delete is the user's own choice; the version history keeps the file, so Undo restores it."""
+    ws = await owned(db, ws_id, user)
+    target = _guard(lambda: wsp.safe_path(wsp.root(ws), path))
+    if not target.is_file():
+        raise HTTPException(400, f"{path} does not exist")
+    target.unlink()
+    return {"commit": await wsp.commit(wsp.root(ws), f"delete {path}")}
+
+
 @router.get("/{ws_id}/changes")
 async def changes(ws_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)) -> list[dict]:
     ws = await owned(db, ws_id, user)
