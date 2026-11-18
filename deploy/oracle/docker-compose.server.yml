@@ -1,0 +1,26 @@
+# Server overlay for docker-compose.yml: the API runs on an Oracle Cloud Always Free VM behind Caddy (free HTTPS),
+# and the web app stays on Vercel. Started by deploy/oracle/setup.sh; VOX_DOMAIN and VOX_PUBLIC_URL come from it.
+services:
+  api:
+    environment:
+      VOX_PUBLIC_URL: ${VOX_PUBLIC_URL:?set VOX_PUBLIC_URL to the Vercel address}
+      VOX_COOKIE_SECURE: "true"
+      VOX_OLLAMA_URL: http://127.0.0.1:9  # no local model on the server: the free cloud models answer
+    restart: unless-stopped
+
+  db:
+    restart: unless-stopped
+
+  web:
+    profiles: [local]  # Vercel serves the web app; `--profile local` brings this back for a one-box setup
+
+  caddy:
+    image: caddy:2-alpine
+    command: caddy reverse-proxy --from ${VOX_DOMAIN:?set VOX_DOMAIN} --to api:8000
+    ports: ["80:80", "443:443"]
+    volumes: [caddy:/data]
+    depends_on: [api]
+    restart: unless-stopped
+
+volumes:
+  caddy:
