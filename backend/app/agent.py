@@ -32,6 +32,14 @@ HINGLISH = {"hai", "hain", "mujhe", "mera", "meri", "kya", "kar", "karo", "nahi"
             "namaste", "bolo", "bol", "bata", "dikha", "bana", "karna", "acha", "accha", "theek", "haan", "ji", "yaar",
             "kuch", "kaun", "kahan", "kitna", "kitne", "kaisa", "mujhko", "humko", "apna", "apni", "bhai", "dost"}
 SUBMIT_RE = re.compile(r"\b(submit|send)\b", re.IGNORECASE)
+# Questions about the world, asked plainly: answered from the web even when the planner does not mark them factual.
+FACT_QUESTION = re.compile(r"^\s*(what|who|whom|when|where|which|why|how (many|much|tall|old|long|far|big|fast|high|"
+                           r"deep|does|do|did|is|are)|is it true|tell me about|explain|define)\b\S*(\s+\S+){2,}", re.I)
+PERSONAL = re.compile(r"\b(i|me|my|mine|we|our|you|your|yourself)\b", re.I)  # about the user or the assistant: not the web
+RECALL_CUE = re.compile(r"\b(i (told|said|mentioned|shared|sent|asked|wrote|saved|gave)|did i (say|tell|mention|send|"
+                        r"share|ask)|we (talked|discussed|decided|spoke|agreed)|remind me what)\b", re.I)
+# gpt-oss cites as 【title】(url) or 【url】: rewritten to a Markdown link the screen can open
+BRACKET_LINK_RE = re.compile(r"【([^】]*)】\s*\((https?://[^)\s]+)\)|【(https?://[^】\s]+)】")
 SOURCED = {"web_search", "web_fetch", "deep_research", "agent_team", "world_briefing"}  # bring their own sources
 CODE_SKILLS = {"code_review", "ask_project", "generate_code", "fix_and_run", "create_project"}  # use VOX_LLM_CODE
 DECLINED = "The user declined this action, so it was not done."
@@ -156,6 +164,10 @@ def _language(text: str, guess: str) -> str:
     return guess
 
 
+def _links(text: str) -> str:
+    return BRACKET_LINK_RE.sub(lambda m: f"[{m[1] or 'source'}]({m[2]})" if m[2] else f"[source]({m[3]})", text)
+
+
 def _wrap_data(text: str) -> str:
     """Sanitize embedded <data> tags so untrusted tool output cannot break out of its container."""
     safe = DATA_TAG_RE.sub("[data]", text)
@@ -249,6 +261,10 @@ class Agent:
     async def run(self, turn: Turn) -> tuple[str, dict[str, Any]]:
         """Handle one user turn. Returns the answer text and the plan."""
         plan = await self.plan(turn)
+        if "recall" in self.skills and RECALL_CUE.search(turn.text) and (plan["unclear"] or not plan["steps"]):
+            # "that thing I told you about" is in the user's history: look it up instead of asking them to repeat it
+            plan = {**plan, "unclear": False, "steps": [{"text": "Look through what you told me", "skill": "recall",
+                                                         "done": False}]}
         if plan["unclear"] and plan["question"] and not FORM_LINK_RE.search(turn.text):  # a form link is the request
             await turn.emit("clarify", question=plan["question"], language=plan["language"])
             return plan["question"], plan
@@ -263,6 +279,9 @@ class Agent:
         system = SYSTEM.format(language=LANGUAGES[plan["language"]], name=name)
         if turn.context:
             system += f"\n\n{_wrap_data(turn.context)}"
+        if prefs := brain.preferences(turn.user_id):  # the user's own wishes are instructions, not just data
+            system += ("\n\nThe user's standing preferences. Follow them in every reply; they override the style rules "
+                       "above:\n" + "\n".join(f"- {p[:200]}" for p in prefs))
         todo = {s["skill"] for s in plan["steps"] if s["skill"]}
         shortlisted = not todo  # no skill planned: offer the closest few once and let the model choose or just answer
         if shortlisted:
@@ -280,7 +299,9 @@ class Agent:
                 return answer, plan
             todo -= {"fill_form", "submit_form"}
         pages = "" if link else await self._read_links(turn, plan, todo)
-        if plan["factual"] and not pages and not link and "web_search" in self.skills and not todo & SOURCED:
+        factual = plan["factual"] or (not plan["steps"] and bool(FACT_QUESTION.search(turn.text))
+                                      and not PERSONAL.search(turn.text))  # backstop if the planner misses one
+        if factual and not pages and not link and "web_search" in self.skills and not todo & SOURCED:
             # facts come from a source the user can open, not from the model's memory alone
             found, *_ = await self._run_skill(ToolCall("web_search", {"query": plan["understood"] or turn.text}),
                                               turn, plan)
@@ -371,7 +392,7 @@ class Agent:
                     answer += await self._say(turn, answer, summary)
                 break
         if held is not None:
-            reply = DATA_TAG_RE.sub("", answer[held:]).strip()
+            reply = _links(DATA_TAG_RE.sub("", answer[held:]).strip())  # fixed before it is shown, not after
             if not read_out:
                 reply = await brain.check(lambda m, schema=None: self.complete(turn.user_id, m, schema), turn.text,
                                           reply, "\n\n".join(evidence))
@@ -379,6 +400,7 @@ class Agent:
             answer = answer[:held] + gap + reply
             await turn.emit("answer.delta", text=gap + reply)
         answer = DATA_TAG_RE.sub("", answer).strip()  # a model sometimes echoes the <data> wrapper
+        answer = _links(answer)
         if not answer:
             answer = last_summary or "Sorry, I didn't get that. Could you say it another way?"
             await turn.emit("answer.delta", text=answer)

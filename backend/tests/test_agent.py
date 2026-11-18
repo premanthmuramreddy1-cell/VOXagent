@@ -542,3 +542,67 @@ def test_chat_and_tasks_are_not_sent_to_the_web():
     search = FakeSearch()
     run(Agent([FakeLLM(plan(), "Hi!")], {"web_search": search}), Recorder())
     assert search.queries == []
+
+
+def test_a_plain_world_question_is_searched_even_when_the_planner_misses_it():
+    search = FakeSearch()
+    llm = FakeLLM(plan(), "About 14 million [Tokyo stats](https://stat.example/tokyo).",
+                  {"ok": True, "problems": [], "fixed": ""})
+    run(Agent([llm], {"web_search": search}), Recorder(), text="How many people live in Tokyo today?")
+    assert search.queries  # planner said not factual; the plain question still got a source
+
+
+def test_questions_about_the_user_are_not_sent_to_the_web():
+    search = FakeSearch()
+    run(Agent([FakeLLM(plan(), "Your name is Asha.")], {"web_search": search}), Recorder(), text="What is my name?")
+    assert search.queries == []
+
+
+def test_a_learned_preference_is_an_instruction_in_every_reply():
+    from app.db import Memory, User, new_id
+
+    with SessionLocal() as db:
+        user = User(email=f"p{new_id()}@example.com", password_hash="x")
+        db.add(user)
+        db.flush()
+        db.add(Memory(user_id=user.id, kind="preference", text="wants to be called Captain"))
+        db.commit()
+        uid = user.id
+    llm = FakeLLM(plan(), "Aye, Captain.")
+    run(Agent([llm], {}), Recorder(), user_id=uid, text="hello there")
+    system = llm.calls[1]["messages"][0]["content"]
+    assert "Follow them in every reply" in system and "- wants to be called Captain" in system
+    assert "<data>" not in system.split("standing preferences")[1]  # outside the data wrapper
+
+
+def test_a_question_about_what_the_user_said_before_searches_their_history():
+    class FakeRecall:
+        name, input_schema, permission = "recall", web_tools.SearchArgs, Permission.READ
+        description = "Search history."
+        queries: list = []
+
+        async def run(self, args, ctx):
+            self.queries.append(args.query)
+            return SkillResult("[chat] marinate paneer in yogurt", {"hits": []})
+
+    recall = FakeRecall()
+    unclear = {**plan(), "unclear": True, "question": "Which cooking thing?"}
+    llm = FakeLLM(unclear, call("recall", query="cooking"), "You told me to marinate paneer in yogurt.")
+    answer, _ = run(Agent([llm], {"recall": recall}), Recorder(), text="What was that cooking thing I told you about?")
+    assert recall.queries and "paneer" in answer  # looked it up instead of asking the user to repeat it
+
+
+def test_bracket_citations_become_links_the_screen_can_open():
+    search = FakeSearch()
+    llm = FakeLLM({**plan(), "factual": True}, "Big【Tokyo stats】(https://stat.example/tokyo) and 【https://b.example/x】.",
+                  {"ok": True, "problems": [], "fixed": ""})
+    answer, _ = run(Agent([llm], {"web_search": search}), Recorder(), text="How big is Tokyo?")
+    assert answer == "Big[Tokyo stats](https://stat.example/tokyo) and [source](https://b.example/x)."
+
+
+def test_the_shown_reply_and_the_saved_answer_match_after_link_fixing():
+    llm = FakeLLM({**plan(), "factual": True}, "Big 【https://b.example/x】.", {"ok": True, "problems": [], "fixed": ""})
+    rec = Recorder()
+    answer, _ = run(Agent([llm], {"web_search": FakeSearch()}), rec, text="How big is Tokyo?")
+    shown = "".join(p["text"] for t, p in rec.events if t == "answer.delta")
+    assert shown == answer == "Big [source](https://b.example/x)."

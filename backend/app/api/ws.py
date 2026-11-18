@@ -232,7 +232,8 @@ async def _turn(channel: Channel, user: User, session_id: str, text: str, pcm: b
     with SessionLocal() as db:
         db.add(Message(session_id=session_id, role="assistant", text=answer, language=plan["language"], plan=plan))
         db.commit()
-    learning = asyncio.create_task(brain.learn(lambda m, schema=None: agent.complete(user.id, m, schema), user.id, text))
+    learning = asyncio.create_task(brain.learn(  # after the reply, so it can use the strongest (code) models
+        lambda m, schema=None: agent.complete(user.id, m, schema, agent.code_llms), user.id, text))
     LEARNING.add(learning)  # held until done: a bare task can be garbage-collected mid-run
     learning.add_done_callback(LEARNING.discard)
     await channel.emit("answer.done", text=answer)

@@ -125,3 +125,79 @@ def test_agent_team_runs_the_parts_in_parallel_then_merges_and_checks(monkeypatc
     assert [m["role"] for m in result.data["team"]] == ["Researcher", "Planner"]
     assert {s["url"] for s in result.data["sources"]} == {"https://e.com/find flights", "https://e.com/find hotels"}
     assert "## Researcher\nflights part" in asked[3][1]["content"]
+
+
+def test_recall_finds_what_was_said_in_other_words():
+    uid = user()
+    with SessionLocal() as db:
+        chat = ChatSession(user_id=uid, title="Food")
+        db.add(chat)
+        db.flush()
+        db.add(Message(session_id=chat.id, role="user", text="Marinate paneer in yogurt and grill it"))
+        db.commit()
+    assert bt.recall(uid, "cooking thing") == []  # no word in common
+    complete, asked = scripted(json.dumps({"words": ["recipe", "marinate", "grill"]}), json.dumps({"items": []}))
+    ctx = RunContext(uid, "s", "", [], AsyncMock(), complete)
+    result = asyncio.run(bt.Recall().run(bt.RecallArgs(query="cooking thing"), ctx))
+    assert result.data["hits"][0]["text"].startswith("Marinate paneer")
+    assert asked  # the model supplied the related words
+
+
+def test_a_report_keeps_only_citations_to_sources_it_read():
+    report = "EVs are cheaper [1, 2, 30]. Fuel costs more [31]. Tax is 5% [4]. Range [2-3]."
+    assert bt.cited_only(report, 24) == "EVs are cheaper [1, 2]. Fuel costs more. Tax is 5% [4]. Range [2, 3]."
+
+
+def test_a_report_without_citations_is_rewritten_once_with_them(monkeypatch):
+    async def search(query, limit=6):
+        return [{"title": f"t{i}", "url": f"https://e.com/{i}", "snippet": "s"} for i in range(3)]
+
+    async def fetch(url, max_chars=20_000):
+        return {"url": url, "title": "T", "text": "nuclear deaths per TWh 0.03"}
+
+    monkeypatch.setattr(web, "search", search)
+    monkeypatch.setattr(web, "fetch", fetch)
+    ok = json.dumps({"ok": True, "problems": [], "fixed": ""})
+    complete, asked = scripted(json.dumps({"queries": []}), "Nuclear is safe.", ok, "Nuclear is safe [1].")
+    ctx = RunContext("u", "s", "", [], AsyncMock(), complete)
+    result = asyncio.run(bt.DeepResearch().run(bt.ResearchArgs(question="Is nuclear safe?"), ctx))
+    assert result.summary.startswith("Nuclear is safe [1].")
+    assert "Add a [n] source number" in asked[3][1]["content"]  # after the check, which may also drop them
+
+
+def test_recall_still_finds_a_match_when_the_model_query_and_expansion_fail():
+    uid = user()
+    with SessionLocal() as db:
+        chat = ChatSession(user_id=uid, title="Food")
+        db.add(chat)
+        db.flush()
+        db.add(Message(session_id=chat.id, role="user", text="My paneer marinade uses yogurt"))
+        db.commit()
+    complete, _ = scripted("not json", "not json")
+    ctx = RunContext(uid, "s", "what was my paneer marinade again?", [], AsyncMock(), complete)
+    result = asyncio.run(bt.Recall().run(bt.RecallArgs(query="cooking note"), ctx))
+    assert result.data["hits"] and "paneer" in result.data["hits"][0]["text"]
+
+
+def test_recall_by_meaning_finds_a_message_that_shares_no_words():
+    uid = user()
+    with SessionLocal() as db:
+        chat = ChatSession(user_id=uid, title="Food")
+        db.add(chat)
+        db.flush()
+        db.add_all([Message(session_id=chat.id, role="user", text="Marinate paneer in yogurt, then grill it"),
+                    Message(session_id=chat.id, role="user", text="Book a cab to the airport")])
+        db.commit()
+    order = [item["text"] for item in bt._recent(uid)]
+    picks = json.dumps({"items": [order.index("Marinate paneer in yogurt, then grill it")]})
+    complete, asked = scripted("not json", picks)  # word expansion failed; the model reads and picks by meaning
+    ctx = RunContext(uid, "s", "what was that cooking thing I told you about?", [], AsyncMock(), complete)
+    result = asyncio.run(bt.Recall().run(bt.RecallArgs(query="cooking thing"), ctx))
+    assert [h["text"] for h in result.data["hits"]] == ["Marinate paneer in yogurt, then grill it"]
+    assert "Book a cab" in asked[1][1]["content"]  # it saw the history as data and chose
+
+
+def test_learn_drops_fragments_that_are_not_a_preference():
+    uid = user()
+    complete, _ = scripted(json.dumps({"preferences": ["Captain", "wants to be called Captain"]}))
+    assert asyncio.run(brain.learn(complete, uid, "Call me Captain from now on")) == ["wants to be called Captain"]

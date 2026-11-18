@@ -45,10 +45,12 @@ PREFERENCE_CUE = re.compile(
     r"(be|keep it|answer) (short|shorter|brief|detailed|formal|casual|simple)|from now on|remember that)\b", re.I)
 LEARN_SCHEMA = {"type": "object", "properties": {"preferences": {"type": "array", "items": {"type": "string"}}},
                 "required": ["preferences"]}
-LEARNER = ("Extract lasting facts and preferences about the user from their message: name, tone and length they want, "
-           "units, favourites, diet, job, city, language. Each as one short third-person line, e.g. 'prefers short "
-           "answers', 'uses Celsius'. Skip one-off requests and anything about other people. Never include passwords, "
-           "card or ID numbers. Return an empty list when there is nothing lasting.")
+LEARNER = ("Extract lasting facts and preferences about the user from their message, each as one complete "
+           "third-person line that keeps their exact specifics. Examples: 'Call me Captain' -> 'wants to be called "
+           "Captain'; 'always answer in one short sentence' -> 'wants every answer in one short sentence'; 'I use "
+           "Celsius' -> 'uses Celsius'; 'I'm vegetarian' -> 'is vegetarian'. Cover name, answer length and tone, units, "
+           "favourites, diet, job, city, language. Skip one-off requests and anything about other people. Never "
+           "include passwords, card or ID numbers. Return an empty list when there is nothing lasting.")
 SECRET = re.compile(r"\d{6,}|password|passcode|pin\b|otp|cvv", re.I)
 
 
@@ -64,7 +66,7 @@ async def learn(complete: Complete, user_id: str, text: str) -> list[str]:
     saved = []
     with SessionLocal() as db:
         for line in (str(p).strip()[:200] for p in found[:5]):
-            if not line or SECRET.search(line):
+            if len(line.split()) < 2 or SECRET.search(line):  # a bare "Captain" is not a usable preference
                 continue
             seen = db.scalar(select(Memory).where(Memory.user_id == user_id,
                                                   func.lower(Memory.text) == line.lower()))
@@ -73,3 +75,11 @@ async def learn(complete: Complete, user_id: str, text: str) -> list[str]:
                 saved.append(line)
         db.commit()
     return saved
+
+
+def preferences(user_id: str, limit: int = 15) -> list[str]:
+    """The user's own standing preferences (name, length, tone, units), newest first."""
+    with SessionLocal() as db:
+        return list(db.scalars(select(Memory.text).where(Memory.user_id == user_id,
+                                                         Memory.kind.in_(("preference", "style")))
+                               .order_by(Memory.updated_at.desc()).limit(limit)))
