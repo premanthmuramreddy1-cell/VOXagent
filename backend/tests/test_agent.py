@@ -708,3 +708,22 @@ def test_a_general_fact_is_searched_even_when_the_planner_picks_memory():
     llm = FakeLLM(planned, call("recall", query="Taj Mahal"), "A marble tomb in Agra.", {"ok": True, "problems": [], "fixed": ""})
     run(Agent([llm], {"recall": _recall_skill(), "web_search": search}), Recorder(), text="tell me about the Taj Mahal")
     assert search.queries
+
+
+def test_a_general_fact_is_searched_whatever_non_source_tool_the_planner_picked():
+    search = FakeSearch()
+
+    class FakeNotes(FakeSearch):
+        name = "list_notes"
+
+    planned = {**plan(), "steps": [{"text": "x", "skill": "list_notes"}]}
+    llm = FakeLLM(planned, call("list_notes", query="x"), "Plates slipping.", {"ok": True, "problems": [], "fixed": ""})
+    run(Agent([llm], {"web_search": search, "list_notes": FakeNotes()}), Recorder(), text="what causes earthquakes")
+    assert search.queries
+
+
+def test_the_memory_search_is_told_todays_date():
+    llm = FakeLLM(plan(), "October: 9,000.")
+    run(Agent([llm], {"recall": _recall_skill()}), Recorder(), text="how much did I spend on groceries last month?",
+        context="Today is Wednesday 18 November 2026, 22:30.\nmore")
+    assert "files were searched for this (Today is Wednesday 18 November 2026" in llm.calls[1]["messages"][0]["content"]

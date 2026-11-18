@@ -38,7 +38,7 @@ FACT_QUESTION = re.compile(r"^\s*(what|who|whom|when|where|which|why|how (many|m
 PERSONAL = re.compile(r"\b(i|me|my|mine|we|our|you|your|yourself)\b", re.I)  # about the user or the assistant: not the web
 RECALL_CUE = re.compile(r"\b(i (told|said|mentioned|shared|sent|asked|wrote|saved|gave)|did i (say|tell|mention|send|"
                         r"share|ask)|we (talked|discussed|decided|spoke|agreed)|remind me what)\b"
-                        r"|^\s*(what|when|where|who)('s| is| was| were) (that|those)\b", re.I)  # "what was that appointment?"
+                        r"|^\s*(what|when|where|who)('s| is| was| were) (that|those)\b|^\s*whose\b|\bcoming up\b", re.I)  # "what was that appointment?"
 # about their own past or plans ("how much did I spend", "my passport"), not "where can I buy a mouse"
 MINE = re.compile(r"\b(my|mine|our)\b|\bdid (i|we)\b|\b(i|we) (did|was|were|had|spent|paid|bought|went|met|told|said)\b"
                   r"|\b(do|should) (i|we) (need|have) to\b", re.I)
@@ -321,7 +321,7 @@ class Agent:
                 return answer, plan
             todo -= {"fill_form", "submit_form"}
         pages = "" if link else await self._read_links(turn, plan, todo)
-        factual = (plan["factual"] or (not steps - {"recall"} and bool(FACT_QUESTION.search(turn.text))
+        factual = (plan["factual"] or (not CODE_HINT.search(turn.text) and bool(FACT_QUESTION.search(turn.text))
                                        and not PERSONAL.search(re.sub(r"^\s*(tell|show|teach) me\b", "", turn.text,
                                                                       flags=re.I))))  # "tell me about X" is not personal
         factual = factual and not SMALL_TALK.search(turn.text)
@@ -337,8 +337,9 @@ class Agent:
             todo -= SOURCED  # answered from the search: no news briefing standing in for the facts
         if lookup:
             found, *_ = await self._run_skill(ToolCall("recall", {"query": plan["understood"] or turn.text}), turn, plan)
-            pages += ("\n\nThe user's own past chats, notes and files were searched for this. If they answer it, answer "
-                      "from them and say where it came from; if not, answer normally:\n" + _wrap_data(found))
+            today = f" ({turn.context.splitlines()[0]})" if turn.context else ""  # "last month" needs today's date
+            pages += (f"\n\nThe user's own past chats, notes and files were searched for this{today}. If they answer it, "
+                      "answer from them and say where it came from; if not, answer normally:\n" + _wrap_data(found))
         system += pages
         if shortlisted and not pages and URL_RE.search(turn.text) and "web_fetch" in self.skills:
             todo.add("web_fetch")  # the link was left to an offered tool, which may be the wrong one: keep it readable
