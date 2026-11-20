@@ -40,3 +40,7 @@ extend-exclude = ["evals/cases"]
 [tool.ruff.lint]
 # B008: FastAPI Depends() in defaults is the idiom. BLE001: broad excepts are deliberate and commented.
 ignore = ["B008", "BLE001", "RUF012", "SIM117", "SIM905", "UP047", "FURB167", "I001"]
+
+[[tool.mypy.overrides]]
+module = ["sympy", "sympy.*"]
+ignore_missing_imports = true

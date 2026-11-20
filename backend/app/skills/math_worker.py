@@ -45,8 +45,8 @@ def _limits() -> None:
 
 
 def run(job: dict) -> dict:
-    import sympy as sp  # type: ignore[import-untyped]
-    from sympy.parsing.sympy_parser import (  # type: ignore[import-untyped]convert_xor, implicit_multiplication_application, parse_expr,
+    import sympy as sp
+    from sympy.parsing.sympy_parser import (convert_xor, implicit_multiplication_application, parse_expr,
                                             standard_transformations)
 
     names = {n: getattr(sp, n) for n in NAMES if hasattr(sp, n)}
