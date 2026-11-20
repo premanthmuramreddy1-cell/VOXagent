@@ -1,6 +1,7 @@
 """Speech-to-text, text-to-speech and LLM providers behind interfaces, chosen by config."""
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -137,6 +138,18 @@ class OllamaLLM:
             yield LLMEvent("" if call else held, [call] if call else [], tokens)
 
 
+def _image_type(b64: str) -> str:
+    """The media type of a base64 picture, read from its first bytes (models reject a mislabelled image)."""
+    head = base64.b64decode(b64[:24] + "=" * (-len(b64[:24]) % 4))
+    if head.startswith(b"\x89PNG"):
+        return "image/png"
+    if head.startswith(b"GIF8"):
+        return "image/gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
+
+
 def _openai_messages(messages: list[dict], schema: dict | None = None) -> list[dict]:
     """Rewrite the agent's Ollama-shaped history as OpenAI chat messages.
 
@@ -173,6 +186,12 @@ def _openai_messages(messages: list[dict], schema: dict | None = None) -> list[d
             })
             continue
         pending = []
+        if message.get("images"):  # Ollama-shaped pictures become OpenAI image parts
+            parts: list[dict] = [{"type": "text", "text": message.get("content") or ""}]
+            parts += [{"type": "image_url", "image_url": {"url": f"data:{_image_type(b64)};base64,{b64}"}}
+                      for b64 in message["images"]]
+            out.append({"role": role, "content": parts})
+            continue
         out.append({"role": role, "content": message.get("content") or ""})
     if schema:  # JSON mode only guarantees syntax, so the shape goes in the prompt
         out.insert(1 if out and out[0]["role"] == "system" else 0, {

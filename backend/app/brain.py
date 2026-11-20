@@ -43,14 +43,20 @@ PREFERENCE_CUE = re.compile(
     r"\b(i (really )?(prefer|like|love|hate|dislike|don'?t like|always|never|usually|want you to)|call me|"
     r"my (name|favou?rite|birthday)|i'?m (a |an )?(vegetarian|vegan|student|developer|doctor|teacher)|"
     r"i (live|work) (in|at)|(in|use) (celsius|fahrenheit|metric|imperial|km|miles|kg|pounds)|"
-    r"(be|keep it|answer) (short|shorter|brief|detailed|formal|casual|simple)|from now on|remember that)\b", re.I)
+    r"(be|keep it|answer) (short|shorter|brief|detailed|formal|casual|simple)|from now on|remember that|"
+    # corrections: the assistant got something wrong, and the user says how it should be
+    r"(that'?s|you'?re|this is) (wrong|incorrect|not right|not what i)|no,? i meant|i meant|you got (it|that) wrong|"
+    r"next time|don'?t ever|stop (doing|saying|adding))\b", re.I)
 LEARN_SCHEMA = {"type": "object", "properties": {"preferences": {"type": "array", "items": {"type": "string"}}},
                 "required": ["preferences"]}
 LEARNER = ("Extract lasting facts and preferences about the user from their message, each as one complete "
            "third-person line that keeps their exact specifics. Examples: 'Call me Captain' -> 'wants to be called "
            "Captain'; 'always answer in one short sentence' -> 'wants every answer in one short sentence'; 'I use "
            "Celsius' -> 'uses Celsius'; 'I'm vegetarian' -> 'is vegetarian'. Cover name, answer length and tone, units, "
-           "favourites, diet, job, city, language. Skip one-off requests and anything about other people. Never "
+           "favourites, diet, job, city, language. When the user corrects the assistant, save the lasting lesson so the "
+           "mistake is not repeated, e.g. 'no, I meant Hyderabad in Pakistan' -> 'means Hyderabad, Pakistan when "
+           "they say Hyderabad'; 'stop adding emojis' -> 'wants no emojis'. A one-off fix with nothing to learn is "
+           "skipped. Skip one-off requests and anything about other people. Never "
            "include passwords, card or ID numbers. Return an empty list when there is nothing lasting.")
 RETRY_PAUSE = 5.0  # seconds
 SECRET = re.compile(r"\d{6,}|password|passcode|pin\b|otp|cvv", re.I)

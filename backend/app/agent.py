@@ -4,6 +4,7 @@ import json
 import re
 from difflib import SequenceMatcher
 import time
+from pathlib import Path
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -133,7 +134,11 @@ course if it failed or surprised you. Try a fix before giving up, finish what yo
 what was asked. Report what actually happened, including what failed.
 Real life: think about the person's actual situation, time, money, safety and who else is affected. Prefer the simple option \
 that works, point out the one risk that matters, and give the next concrete step. For health, legal or money decisions, \
-give useful information plainly and say when a professional is worth seeing.{name}"""
+give useful information plainly and say when a professional is worth seeing.
+Trust: say where facts came from (cite the tool's sources as links) and how sure you are when it matters. Say plainly \
+when you do not know or the sources disagree, and never fill a gap with a guess presented as fact. On contested \
+topics, give the main views fairly and avoid stereotypes about any group. Keep the user's private data private: never \
+repeat passwords, card numbers or other secrets back, and only use their data for what they asked.{name}"""
 
 
 def _words(text: str) -> list[str]:
@@ -225,7 +230,16 @@ def _attached(turn: Turn) -> str:
     with SessionLocal() as db:  # the user's own uploads only
         names = db.scalars(select(Upload.filename).where(Upload.id.in_(turn.upload_ids), Upload.user_id == turn.user_id))
         listed = ", ".join(name[:80] for name in list(names)[:5]) or f"{len(turn.upload_ids)} file(s)"
-    return f"\n[Attached: {listed}. Read attached files with the explain or code_review tool; read_file only sees the workspace.]"
+    return (f"\n[Attached: {listed}. Look at images, videos and audio with look_at_media; read other attached files "
+            "with the explain or code_review tool; read_file only sees the workspace.]")
+
+
+def _has_media(turn: Turn) -> bool:
+    from app.skills.see import MEDIA
+
+    with SessionLocal() as db:
+        names = db.scalars(select(Upload.filename).where(Upload.id.in_(turn.upload_ids), Upload.user_id == turn.user_id))
+        return any(Path(name).suffix.lower() in MEDIA for name in names)
 
 
 def log_activity(turn: Turn, action: str, reason: str, permission: str = "read", outcome: str = "ok") -> None:
@@ -364,6 +378,8 @@ class Agent:
         said += _attached(turn)
         if turn.upload_ids and "explain" in self.skills:
             todo.add("explain")  # read_file only sees the workspace; attachments are read through explain
+        if turn.upload_ids and "look_at_media" in self.skills and _has_media(turn):
+            todo.add("look_at_media")  # a photo or video: the model can only see it through this tool
         messages = [{"role": "system", "content": system}, *turn.history, {"role": "user", "content": said}]
         if shortlisted and todo:  # models answered "which device?" or "I cannot browse" with the right tool in hand
             messages[0]["content"] += (

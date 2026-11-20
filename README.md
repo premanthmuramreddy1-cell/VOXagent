@@ -47,6 +47,8 @@ A guided walkthrough of every phase is in [DEMO.md](DEMO.md).
 | Changes | `apply_changes` (say "apply"), `apply_deletions` (more than 5 deletes: say "yes"), `reject_changes`, `undo_change`, `change_history`, `open_workspace` | apply / yes |
 | Running code | `run_command`, `install_packages` (checks the latest version first), `run_tests`, `start_server` (preview URL), `stop_server`, `read_logs`, `fix_and_run`, `create_project` | apply |
 | Web | `web_search` (cites links), `web_fetch`, `package_version` | read |
+| Seeing and hearing | `look_at_media` (photos, screenshots, charts, receipts; videos sampled into frames plus their soundtrack; audio transcribed; needs a vision model and ffmpeg) | read |
+| Maths | `calculate` (exact arithmetic, percentages, powers, roots, trig, logs, combinatorics, statistics) | read |
 | Personal | `remember`, `forget`, `list_memory`, `update_project_notes`, `save_note`, `search_notes`, `add_reminder`, `list_reminders`, `complete_reminder`, `daily_briefing` | read / apply |
 | Accounts | `draft_email`, `send_email`, `create_event`, `github_open_pr`, `github_publish`, `deploy_project` | apply · **yes** |
 | Forms | `fill_form` (preview, pauses), `submit_form`, `cancel_form` | apply · **yes** |
@@ -56,6 +58,8 @@ A guided walkthrough of every phase is in [DEMO.md](DEMO.md).
 Ordering never types card numbers, CVV, passwords or OTPs; a checkout that needs them is handed back to you.
 The final "place order / pay / subscribe" button is detected in code and never clicked by the browsing step,
 and placing the order always happens on your next turn, after you have seen the preview and total.
+
+The agent learns from corrections ("no, I meant…", "stop adding emojis") as standing preferences you can see and delete under memory. Answers cite their sources and say how sure they are.
 
 Edit tools only stage a diff. Nothing reaches disk until you accept it (per change in the Workspace tab, or say
 "apply"), and every accepted change is a git commit that "undo that" reverts. Sending, paying, submitting,

@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     llm_first_token_s: float = 15  # a model silent this long hands the turn to the next one (voice needs fast replies)
 
     max_upload_bytes: int = 5_000_000
+    max_media_bytes: int = 25_000_000  # images, video and audio for look_at_media
     max_review_files: int = 40
     max_file_chars: int = 12_000
     max_text_chars: int = 4_000

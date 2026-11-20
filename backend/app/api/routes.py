@@ -115,7 +115,10 @@ def list_activity(session_id: str, user: User = Depends(current_user), db: Sessi
 
 @router.post("/uploads")
 async def upload(file: UploadFile, user: User = Depends(current_user), db: Session = Depends(get_db)) -> dict:
-    limit = settings().max_upload_bytes
+    from app.skills.see import MEDIA  # here: skills import the API's models
+
+    media = Path(file.filename or "").suffix.lower() in MEDIA
+    limit = settings().max_media_bytes if media else settings().max_upload_bytes
     blob = await file.read(limit + 1)
     if len(blob) > limit:
         raise HTTPException(413, f"file is larger than {limit // 1_000_000} MB")
