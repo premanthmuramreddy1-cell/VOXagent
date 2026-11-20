@@ -50,7 +50,7 @@ def test_audio_is_transcribed_and_the_words_reach_the_model(monkeypatch):
 
     message = ctx.complete.await_args.args[0][1]
     assert "buy milk at six" in message["content"] and "images" not in message
-    assert result.data == {"kind": "audio recording", "file": "memo.mp3", "frames": 0, "transcribed": True}
+    assert result.data["kind"] == "audio recording" and result.data["transcribed"] is True
 
 
 @ffmpeg
@@ -99,3 +99,38 @@ def test_a_large_video_upload_is_allowed_but_a_large_text_file_is_not(client, au
     big = b"x" * 100
     assert client.post("/uploads", files={"file": ("clip.mp4", big)}, headers=auth).status_code == 200
     assert client.post("/uploads", files={"file": ("notes.txt", big)}, headers=auth).status_code == 413
+
+
+def test_several_attachments_are_looked_at_together():
+    attach("u-two", "e" * 32, "before.png", PNG)
+    attach("u-two", "f" * 32, "after.png", PNG)
+    attach("u-two", "9" * 32, "notes.txt", b"not media")  # skipped, not an error
+    ctx = RunContext("u-two", "s1", "compare", ["e" * 32, "f" * 32, "9" * 32], AsyncMock(), AsyncMock(return_value="ok"))
+    result = asyncio.run(skill.run(Args(question="what changed?"), ctx))
+
+    message = ctx.complete.await_args.args[0][1]
+    assert len(message["images"]) == 2 and "File 1" in message["content"] and "File 2" in message["content"]
+    assert result.data["files"] == ["before.png", "after.png"]
+
+
+def one_page_pdf() -> bytes:
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>", b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+               b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 280] >>"]
+    out, offsets = b"%PDF-1.4\n", []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (number, body)
+    xref = len(out)
+    out += b"xref\n0 4\n0000000000 65535 f \n" + b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    return out + b"trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % xref
+
+
+@pytest.mark.skipif(not shutil.which("pdftoppm"), reason="needs pdftoppm")
+def test_pdf_pages_are_rendered_as_pictures():
+    attach("u-pdf", "7" * 32, "scan.pdf", one_page_pdf())
+    ctx = context("u-pdf", "7" * 32, "A blank page.")
+    result = asyncio.run(skill.run(Args(), ctx))
+
+    message = ctx.complete.await_args.args[0][1]
+    assert result.data["pictures"] == 1 and "its pages" in message["content"]
+    assert base64.b64decode(message["images"][0])[:4] == b"\x89PNG"
