@@ -89,6 +89,8 @@ def _eval(node: ast.AST) -> Number:
                 for a in (_eval(x) for x in node.args)]
         if node.func.id == "factorial" and (not args or args[0] > 5_000):
             raise ValueError("that factorial is too large")
+        if node.func.id in ("comb", "perm") and args and abs(args[0]) > 100_000:  # these run in the server's event loop
+            raise ValueError(f"that {node.func.id} is too large")
         out = _clean(FUNCTIONS[node.func.id](*args))
         return out if isinstance(out, float) else Fraction(out)
     raise ValueError("that is not a calculation I can evaluate")

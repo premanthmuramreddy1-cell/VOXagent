@@ -31,7 +31,7 @@ def test_calculate_gets_it_right(expression, expected):
 
 
 @pytest.mark.parametrize("bad", [
-    "__import__('os').system('id')", "open('x')", "a + 1", "9**99999", "1/0", "factorial(99999)", "x" * 500, "", "[1,2]",
+    "__import__('os').system('id')", "open('x')", "a + 1", "9**99999", "1/0", "factorial(99999)", "comb(10^7, 5*10^6)", "perm(10^7, 10^6)", "x" * 500, "", "[1,2]",
     "(-8)**0.5", "'a'*3", "True + 1",
 ])
 def test_calculate_refuses_anything_that_is_not_a_calculation(bad):
