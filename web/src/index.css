@@ -354,3 +354,8 @@ body {
   .no-print { display: none !important; }
   body { background: #fff !important; color: #000 !important; }
 }
+
+/* at rest: the assistant's mark beside each reply, slow and quiet */
+.orb[data-phase="rest"] .orb-ring { animation-duration: 9s; opacity: 0.55; }
+.orb[data-phase="rest"] .orb-core { animation-duration: 4s; box-shadow: 0 0 8px color-mix(in oklab, var(--accent) 45%, transparent); }
+@media (prefers-reduced-motion: reduce) { .orb-ring, .orb-core { animation: none !important; } }

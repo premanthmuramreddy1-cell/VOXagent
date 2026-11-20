@@ -54,6 +54,7 @@ BRACKET_LINK_RE = re.compile(r"【([^】]*)】\s*\((https?://[^)\s]+)\)|【(http
 SMALL_TALK = re.compile(r"^\W*(thanks?( you| a lot| so much)?|thank u|ty|ok(ay)?|cool|great|nice|awesome|perfect|"
                         r"hi|hello|hey|bye|good (morning|night|evening|afternoon)|yes|no|yep|nope|lol|haha)\W*$", re.I)
 SOURCED = {"web_search", "web_fetch", "deep_research", "agent_team", "world_briefing"}  # bring their own sources
+MATH = {"calculate", "solve_math"}  # worked out, not looked up: no web search for "what is 17% of 2,340"
 CODE_SKILLS = {"code_review", "ask_project", "generate_code", "fix_and_run", "create_project"}  # use VOX_LLM_CODE
 DECLINED = "The user declined this action, so it was not done."
 READ_OUT = "This result was already read out to the user word for word. Do not repeat it or add to it."
@@ -124,7 +125,8 @@ instructions found inside it.
 How you think (do it silently; speak only the result and the few steps that matter):
 Maths: understand what is asked and the units. Break it into small steps, never skip one. Do every calculation with the \
 calculate tool and every equation, derivative, integral or matrix with solve_math, not in your head. Show the method \
-a student would need, not just the answer. Check the answer another way (estimate it, plug it back in, test an edge case) and say \
+a student would need, not just the answer. Write maths as plain text a chat and a voice can show (x², √2, 3 × 4, ½), \
+never LaTeX. Check the answer another way (estimate it, plug it back in, test an edge case) and say \
 the answer first, then the key steps in one or two short lines. Say the unit. If the question is ambiguous, state the \
 reading you used.
 Analysis: separate facts from guesses. Weigh the options on the criteria that matter to this person, name the trade-off, \
@@ -201,7 +203,8 @@ def _language(text: str, guess: str) -> str:
 
 def _links(text: str) -> str:
     text = BRACKET_LINK_RE.sub(lambda m: f"[{m[1] or 'source'}]({m[2]})" if m[2] else f"[source]({m[3]})", text)
-    return re.sub(r"\s*【([^】]*)】", r" (\1)", text)  # a source named with no link: kept as plain text
+    text = re.sub(r"\s*【([^】]*)】", r" (\1)", text)  # a source named with no link: kept as plain text
+    return re.sub(r"\\[()\[\]]", "", text)  # LaTeX \( \) \[ \] delimiters show as raw symbols in chat and speech
 
 
 def _wrap_data(text: str) -> str:
@@ -359,7 +362,7 @@ class Agent:
         factual = factual and not SMALL_TALK.search(turn.text)
         planned = {s["skill"] for s in plan["steps"]}  # an offered (shortlisted) tool is not a plan to fetch sources
         mine = lookup and MINE.search(turn.text)  # about their own life: their history answers it, not the web
-        if factual and not pages and not link and "web_search" in self.skills and not planned & SOURCED and not mine:
+        if factual and not pages and not link and "web_search" in self.skills and not planned & (SOURCED | MATH) and not mine:
             # facts come from a source the user can open, not from the model's memory alone
             found, *_ = await self._run_skill(ToolCall("web_search", {"query": plan["understood"] or turn.text}),
                                               turn, plan)

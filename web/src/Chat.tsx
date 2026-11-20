@@ -4,7 +4,7 @@ import { api, download, post, Socket, upload } from './api'
 import { parse, type Inline } from './markdown'
 import { Mic, Player } from './audio'
 import { setSwarmMood } from './swarmEngine'
-import Thinking from './Thinking'
+import Thinking, { Orb } from './Thinking'
 import { BuildCard, NewsDeck } from './BotDeck'
 import { buildCredit, importModel, isModel, playBuild, playNews, releaseBots, type Briefing, type Build } from './botShow'
 import {
@@ -20,7 +20,6 @@ import {
   Copy,
   Check,
   AlertCircle,
-  Bot,
   FileText,
   X,
   ExternalLink,
@@ -368,8 +367,9 @@ function Bubble({ item }: { item: Item }) {
   return (
     <div className="flex items-start gap-3">
       {/* Assistant Avatar */}
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-accent/40 bg-accent-subtle text-accent shadow-xs mt-0.5">
-        <Bot className="h-4 w-4" />
+      {/* hidden while live: the Thinking line carries the moving orb then */}
+      <div className={`mt-2 flex h-8 w-8 shrink-0 items-center justify-center ${item.live ? 'invisible' : ''}`}>
+        <Orb phase="rest" />
       </div>
 
       <div className="group relative min-w-0 max-w-2xl flex-1 space-y-3">
@@ -405,8 +405,8 @@ function Bubble({ item }: { item: Item }) {
 
         {/* Text Answer */}
         {(item.text || item.live) && (
-          <div className="relative rounded-2xl rounded-tl-xs border border-line/50 bg-raised py-3 pl-4 pr-12">
-            <div className="space-y-2 break-words text-sm leading-relaxed text-ink">
+          <div className="relative py-1 pl-1 pr-12">
+            <div className="space-y-3 break-words text-[15px] leading-7 text-ink">
               <Rich text={item.text} />
               {item.live && (
                 <span className="ml-1 inline-block h-3.5 w-1.5 animate-pulse bg-accent align-middle" />

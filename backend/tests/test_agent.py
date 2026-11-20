@@ -727,3 +727,20 @@ def test_the_memory_search_is_told_todays_date():
     run(Agent([llm], {"recall": _recall_skill()}), Recorder(), text="how much did I spend on groceries last month?",
         context="Today is Wednesday 18 November 2026, 22:30.\nmore")
     assert "files were searched for this (Today is Wednesday 18 November 2026" in llm.calls[1]["messages"][0]["content"]
+
+
+def test_a_maths_question_with_a_maths_tool_is_not_web_searched():
+    search = FakeSearch()
+
+    class FakeCalc(FakeSearch):
+        name = "calculate"
+
+    planned = {**plan(), "steps": [{"text": "x", "skill": "calculate"}]}
+    llm = FakeLLM(planned, call("calculate", query="0.17*2340"), "397.8", {"ok": True, "problems": [], "fixed": ""})
+    run(Agent([llm], {"web_search": search, "calculate": FakeCalc()}), Recorder(), text="What is 17% of 2,340?")
+    assert search.queries == []
+
+
+def test_latex_delimiters_are_removed_from_the_answer():
+    from app.agent import _links
+    assert _links(r"The roots are \(x = 2\) and \[x = 3\].") == "The roots are x = 2 and x = 3."

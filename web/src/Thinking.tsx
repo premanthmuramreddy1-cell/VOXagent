@@ -24,10 +24,10 @@ function toolLabel(skill: string): string {
 
 const SAID = { running: 'in progress', ok: 'done', failed: 'failed' } as const
 
-type Phase = 'thinking' | 'working' | 'writing' | 'done' | 'issue'
+type Phase = 'thinking' | 'working' | 'writing' | 'done' | 'issue' | 'rest'
 
 /** The living mark: a soft core inside a turning ring. It breathes while thinking, spins while a tool runs, settles to a tick when done. */
-function Orb({ phase }: { phase: Phase }) {
+export function Orb({ phase }: { phase: Phase }) {
   return (
     <span className="orb" data-phase={phase} aria-hidden="true">
       <span className="orb-ring" />
@@ -39,7 +39,7 @@ function Orb({ phase }: { phase: Phase }) {
 }
 
 const WORDS: Record<Phase, string> = {
-  thinking: 'Thinking', working: 'Working', writing: 'Writing', done: 'Done', issue: 'Finished with a problem',
+  thinking: 'Thinking', working: 'Working', writing: 'Writing', done: 'Done', issue: 'Finished with a problem', rest: '',
 }
 
 type Props = {
