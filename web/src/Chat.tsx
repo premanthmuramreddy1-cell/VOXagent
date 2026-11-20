@@ -4,8 +4,7 @@ import { api, download, post, Socket, upload } from './api'
 import { parse, type Inline } from './markdown'
 import { Mic, Player } from './audio'
 import { setSwarmMood } from './swarmEngine'
-import ThoughtTrail from './ThoughtTrail'
-import Sources from './Sources'
+import Thinking from './Thinking'
 import { BuildCard, NewsDeck } from './BotDeck'
 import { buildCredit, importModel, isModel, playBuild, playNews, releaseBots, type Briefing, type Build } from './botShow'
 import {
@@ -18,11 +17,9 @@ import {
   Square,
   Plus,
   CheckCircle2,
-  Terminal,
   Copy,
   Check,
   AlertCircle,
-  Sparkles,
   Bot,
   FileText,
   X,
@@ -376,101 +373,32 @@ function Bubble({ item }: { item: Item }) {
       </div>
 
       <div className="group relative min-w-0 max-w-2xl flex-1 space-y-3">
-        {/* Restatement Callout */}
-        {item.restate && (
-          <div className="rounded-xl border border-line bg-surface px-3.5 py-2 font-mono text-xs">
-            <span className="font-semibold text-accent uppercase tracking-wider">Plan Target: </span>
-            <span className="text-muted">{item.restate}</span>
-            {item.understood && (
-              <p className="mt-1 text-muted">
-                <span className="font-semibold text-accent uppercase tracking-wider">Read as: </span>
-                {item.understood}
-              </p>
-            )}
-          </div>
-        )}
+        {/* One animated status: goal, plan, tools and reasoning fold into it */}
+        <Thinking restate={item.restate} understood={item.understood} steps={item.steps} tools={item.tools}
+                  live={item.live} answering={Boolean(item.text)} />
 
         {item.extras && item.extras.length > 0 && <Extras extras={item.extras} />}
 
-        {/* Plan Steps */}
-        {item.steps && item.steps.length > 0 && (
-          <div className="rounded-xl border border-line bg-surface p-3.5 shadow-xs">
-            <div className="mb-2.5 flex items-center justify-between font-mono text-xs">
-              <span className="label flex items-center gap-1.5">
-                <Terminal className="h-3 w-3 text-accent" /> Execution Steps
+        {/* The one action a product search leaves behind stays in plain sight, not folded away */}
+        {item.tools?.find((t) => t.data?.checkout_url) && (
+          <div className="flex flex-wrap items-center gap-3">
+            <a
+              className="btn btn-accent"
+              href={item.tools.find((t) => t.data?.checkout_url)?.data.checkout_url}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <span>
+                Open product search ({item.tools.find((t) => t.data?.checkout_url)?.data.currency ?? 'USD'}{' '}
+                {item.tools.find((t) => t.data?.checkout_url)?.data.total_estimated_cost} est.)
               </span>
-              <span className="text-muted">
-                {item.steps.filter((s) => s.done).length} / {item.steps.length} done
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+            {item.tools.find((t) => t.data?.opened_in_browser)?.data.opened_in_browser && (
+              <span className="flex items-center gap-1 text-[11px] text-ok">
+                <CheckCircle2 className="h-3 w-3" />
+                Tab opened on your Mac
               </span>
-            </div>
-            <ul className="space-y-1.5">
-              {item.steps.map((step, index) => (
-                <li key={index} className="flex items-start gap-2.5 text-xs">
-                  {step.done ? (
-                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ok" />
-                  ) : (
-                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full border border-line bg-transparent" />
-                  )}
-                  <span className={step.done ? 'text-muted line-through' : 'font-mono text-ink'}>
-                    {step.text}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* Tool Invocations */}
-        {item.tools && item.tools.length > 0 && (
-          <div className="flex flex-col gap-2.5">
-            <ThoughtTrail tools={item.tools} />
-            <Sources tools={item.tools} />
-
-            {/* Thinking / Reasoning Breakdown */}
-            {item.tools?.some((t) => t.data?.thinking?.length > 0) && (
-              <div className="rounded-xl border border-line bg-surface p-3.5 font-mono text-xs shadow-xs">
-                <div className="flex items-center gap-1.5 font-semibold text-muted">
-                  <Sparkles className="h-3.5 w-3.5 text-accent" />
-                  <span className="text-ink">Reasoning & Product Evaluation</span>
-                </div>
-                <ul className="mt-2.5 space-y-1.5 text-ink/80">
-                  {item.tools
-                    .flatMap((t) => t.data?.thinking || [])
-                    .map((step: string, idx: number) => (
-                      <li key={idx} className="flex items-start gap-2">
-                        <span className="text-accent font-bold">›</span>
-                        <span>{step}</span>
-                      </li>
-                    ))}
-                </ul>
-                {item.tools?.find((t) => t.data?.comparison)?.data?.comparison && (
-                  <div className="mt-2.5 border-t border-line/60 pt-2 text-[11px] text-muted italic">
-                    Decision factor: {item.tools.find((t) => t.data?.comparison)?.data?.comparison}
-                  </div>
-                )}
-                {item.tools?.find((t) => t.data?.checkout_url) && (
-                  <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-line/60 pt-3">
-                    <a
-                      className="inline-flex items-center gap-2 rounded-lg bg-accent px-3.5 py-1.5 font-mono text-xs font-bold text-white shadow-xs transition hover:brightness-110"
-                      href={item.tools.find((t) => t.data?.checkout_url)?.data.checkout_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      <span>
-                        Open product search ({item.tools.find((t) => t.data?.checkout_url)?.data.currency ?? 'USD'}{' '}
-                        {item.tools.find((t) => t.data?.checkout_url)?.data.total_estimated_cost} est.)
-                      </span>
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                    {item.tools.find((t) => t.data?.opened_in_browser)?.data.opened_in_browser && (
-                      <span className="flex items-center gap-1 text-[11px] text-ok">
-                        <CheckCircle2 className="h-3 w-3" />
-                        Tab opened on your Mac
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
             )}
           </div>
         )}
@@ -1030,6 +958,14 @@ export default function Chat() {
             {items.map((item, index) => (
               <Bubble key={index} item={item} />
             ))}
+
+            {/* The turn was sent but nothing has come back yet: the orb says the agent is already thinking */}
+            {busy && items[items.length - 1]?.role === 'user' && (
+              <div className="flex items-start gap-3">
+                <div className="w-8 shrink-0" aria-hidden="true" />
+                <div className="min-w-0 max-w-2xl flex-1"><Thinking pending /></div>
+              </div>
+            )}
 
             {/* Confirmation Modal / Card */}
             {confirm && (

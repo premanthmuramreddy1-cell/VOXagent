@@ -26,7 +26,8 @@ speaking. The UI is glass over it, never an opaque slab.
 
 Rules
 - Glass surfaces use `bg-surface`/`bg-raised` plus `glass` (blur and dot matrix). Never an opaque full-page layer.
-- Glow and violet live only inside the swarm; the UI itself stays flat glass and hairlines.
+- Glow and violet live only inside the swarm; the UI stays flat glass and hairlines. One exception: the Thinking orb (`src/Thinking.tsx`) and the soft halo of a card while the agent is busy.
+- Agent activity is one component, never stacked boxes: an orb that breathes while thinking, spins while a tool runs and settles to a tick when done. Goal, plan, tools and reasoning fold open beneath it.
 - Body text 16px at 1.6; labels 11 to 12px mono. Weights 400 and 600.
 - One primary action per screen (the mic). Touch targets at least 44px. Focus ring is a 2px accent outline.
 - Motion: the swarm runs on the GPU with an adaptive bot budget; it slows to a near-still 32k bots under
