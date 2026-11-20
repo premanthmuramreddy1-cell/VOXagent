@@ -1,3 +1,4 @@
+import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -266,7 +267,9 @@ def _engine():
         if ":memory:" in url:
             kw["poolclass"] = StaticPool
         return create_engine(url, **kw)
-    return create_engine(url)
+    # hosted Postgres hands out postgres:// URLs; the installed driver is psycopg 3, not SQLAlchemy's default psycopg2
+    url = re.sub(r"^postgres(ql)?://", "postgresql+psycopg://", url)
+    return create_engine(url, pool_pre_ping=True)  # free databases drop idle connections
 
 
 engine = _engine()

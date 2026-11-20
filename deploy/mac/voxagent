@@ -1,0 +1,40 @@
+#!/bin/bash
+# voxagent: start every VoxAgent server on this Mac and check the public link.
+#   voxagent          start anything that is down, then show status
+#   voxagent status   only show status
+#   voxagent restart  restart the API (after pulling new code)
+uid=$(id -u)
+ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; }
+bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; }
+
+start() {
+  pgrep -q -f "Docker.app" || open -ga Docker
+  curl -s -m 2 localhost:11434 >/dev/null || open -ga Ollama
+  launchctl kickstart "gui/$uid/com.voxagent.tailscaled" 2>/dev/null
+  # a copy started by hand holds the port and stops the managed API from starting
+  for pid in $(lsof -nP -iTCP:8000 -sTCP:LISTEN -t); do
+    [ "$(ps -o ppid= -p "$pid" | tr -d ' ')" = "$(launchctl list | awk '/com.voxagent.api$/{print $1}')" ] || kill "$pid"
+  done
+  launchctl kickstart "gui/$uid/com.voxagent.api" 2>/dev/null
+  printf 'Starting'
+  for _ in $(seq 1 40); do curl -s -m 2 -o /dev/null localhost:8000/healthz && break; printf '.'; sleep 1; done
+  echo
+}
+
+status() {
+  echo "VoxAgent"
+  curl -s -m 3 -o /dev/null localhost:8000/healthz && ok "API" || bad "API (log: backend/data/api.log)"
+  /opt/homebrew/bin/tailscale --socket "$HOME/Library/Application Support/voxagent-tailscale/tailscaled.sock" funnel status 2>/dev/null | grep -q https \
+    && ok "Tunnel" || bad "Tunnel"
+  curl -s -m 2 localhost:11434 >/dev/null && ok "Ollama (backup model)" || bad "Ollama (backup model)"
+  docker info >/dev/null 2>&1 && ok "Docker (runs code)" || bad "Docker (runs code; still starting, or open Docker)"
+  code=$(curl -s -m 20 -o /dev/null -w '%{http_code}' https://voxagent-pi.vercel.app/auth/config)
+  [ "$code" = 200 ] && ok "Public link: https://voxagent-pi.vercel.app" || bad "Public link ($code)"
+}
+
+case "${1:-start}" in
+  status) ;;
+  restart) launchctl kickstart -k "gui/$uid/com.voxagent.api"; sleep 5 ;;
+  *) start ;;
+esac
+status
